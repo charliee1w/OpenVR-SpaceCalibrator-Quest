@@ -145,8 +145,8 @@ SLAM preset applies automatically when continuous cal starts (`SlamReferencePres
 **Prerequisites:** Visual Studio 2022, CMake 3.20+, Git submodules initialized.
 
 ```powershell
-git clone --recurse-submodules https://github.com/YOUR_USER/OpenVR-SpaceCalibrator.git
-cd OpenVR-SpaceCalibrator
+git clone --recurse-submodules https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest.git
+cd OpenVR-SpaceCalibrator-Quest
 .\GenWin64.bat
 cmake --build bin --config Release
 ```

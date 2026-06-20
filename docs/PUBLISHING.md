@@ -11,18 +11,15 @@ Use this before making the repository public on GitHub.
 
 ## Repository setup
 
-1. Create new GitHub repo (suggested name: `OpenVR-SpaceCalibrator-Quest` or `SpaceCal-contcal`).
+1. Repo: https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest
 2. Do **not** push to `hyblocker/OpenVR-SpaceCalibrator` — this is a fork.
-3. Update `README.md` clone URL (`YOUR_USER` placeholder).
+3. `upstream` → hyblocker; `origin` → charliee1w fork (see remotes below).
 4. Optional: add GitHub Topics: `steamvr`, `quest`, `virtual-desktop`, `full-body-tracking`, `lighthouse`, `openvr`.
 
 ```powershell
-git remote rename origin upstream   # keep hyblocker as upstream optional
-git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
-git checkout -b contcal5-release
-git add README.md docs/ profiles/ scripts/ src/ NOTICE LICENSE .gitignore
-git commit -m "Release contcal5: Quest SLAM continuous calibration fork"
+git remote set-url origin https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest.git
 git push -u origin contcal5-release
+git push origin v1.5.1-contcal5
 ```
 
 ## First GitHub release
