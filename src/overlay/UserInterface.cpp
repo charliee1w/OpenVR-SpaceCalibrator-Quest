@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <imgui/imgui.h>
 #include "imgui_extensions.h"
+#include "ui_theme.h"
+#include <cstdio>
 
 void TextWithWidth(const char *label, const char *text, float width);
 void DrawVectorElement(const std::string id, const char* text, double* value, int defaultValue = 0, const char* defaultValueStr = " 0 ");
@@ -79,11 +81,16 @@ void ShowVersionLine() {
 		ImGui::EndChild();
 		return;
 	}
-	ImGui::Text("Space Calibrator v" SPACECAL_VERSION_STRING);
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::Separator();
+	ImGui::Text("v" SPACECAL_VERSION_STRING);
+	ImGui::PopStyleColor();
 	if (runningInOverlay)
 	{
 		ImGui::SameLine();
-		ImGui::Text("- close VR overlay to use mouse");
+		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+		ImGui::TextUnformatted("  |  close overlay for mouse input");
+		ImGui::PopStyleColor();
 	}
 	ImGui::EndChild();
 }
@@ -112,13 +119,16 @@ void BuildContinuousCalDisplay() {
 		return;
 	}
 
-	if (ImGui::BeginTabBar("CCalTabs", 0)) {
+	ImGui::SectionHeading("Continuous calibration",
+		"Keeping your Quest and lighthouse playspaces aligned in real time.");
+
+	if (ImGui::BeginTabBar("CCalTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Status")) {
 			CCal_BasicInfo();
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("More Graphs")) {
+		if (ImGui::BeginTabItem("Graphs")) {
 			ShowCalibrationDebug(2, 3);
 			ImGui::EndTabItem();
 		}
@@ -162,20 +172,141 @@ static void ScaledDragFloat(const char* label, double& f, double scale, double m
 	f = v / scale;
 }
 
+static void DrawDeviceStatusCard(const char* id, const char* role, const char* trackingSystem,
+	const char* model, const char* serial, bool found, bool tracking)
+{
+	ImGui::PushID(id);
+	ImVec2 pos = ImGui::GetCursorScreenPos();
+	float width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+	float height = ImGui::GetFrameHeight() * 5.0f;
+	ImVec2 size(width, height);
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+	ImVec4 accent = SpaceCalUI::StatusError();
+	const char* status = "NOT FOUND";
+	if (found) {
+		if (tracking) {
+			accent = SpaceCalUI::StatusOk();
+			status = "TRACKING";
+		} else {
+			accent = SpaceCalUI::StatusWarn();
+			status = "NOT TRACKING";
+		}
+	}
+
+	drawList->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+		SpaceCalUI::ColorToU32(ImVec4(0.10f, 0.13f, 0.16f, 1.0f)), 6.0f);
+	drawList->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+		SpaceCalUI::ColorToU32(ImVec4(0.20f, 0.26f, 0.32f, 0.65f)), 6.0f);
+	drawList->AddRectFilled(pos, ImVec2(pos.x + 4.0f, pos.y + size.y),
+		SpaceCalUI::ColorToU32(accent, 0.95f), 3.0f);
+
+	ImGui::Dummy(size);
+	ImGui::SetCursorScreenPos(ImVec2(pos.x + 14.0f, pos.y + 10.0f));
+	ImGui::PushStyleColor(ImGuiCol_Text, SpaceCalUI::Accent());
+	ImGui::TextUnformatted(role);
+	ImGui::PopStyleColor();
+	ImGui::SetCursorScreenPos(ImVec2(pos.x + 14.0f, pos.y + 10.0f + ImGui::GetTextLineHeight() + 4.0f));
+	ImGui::TextWrapped("%s", trackingSystem);
+	ImGui::SetCursorScreenPos(ImVec2(pos.x + 14.0f, pos.y + 10.0f + (ImGui::GetTextLineHeight() + 4.0f) * 2.0f));
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::TextWrapped("%s / %s", model, serial);
+	ImGui::PopStyleColor();
+	ImGui::SetCursorScreenPos(ImVec2(pos.x + 14.0f, pos.y + size.y - ImGui::GetTextLineHeight() - 10.0f));
+	ImGui::StatusBadge(status, SpaceCalUI::ColorToU32(accent, 0.85f));
+	ImGui::SetCursorScreenPos(ImVec2(pos.x + size.x + ImGui::GetStyle().ItemSpacing.x, pos.y));
+	ImGui::PopID();
+}
+
+static void DrawLiveMetricsRow() {
+	char buf[64];
+	const double errorMm = Metrics::error_currentCal.last();
+	const double refJitter = Metrics::jitterRef.last();
+	const double targetJitter = Metrics::jitterTarget.last();
+	const double computeMs = Metrics::computationTime.last();
+
+	const float cardH = ImGui::GetFrameHeight() * 3.2f;
+	const float rowGap = ImGui::GetStyle().ItemSpacing.y;
+	const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+
+	snprintf(buf, sizeof(buf), "%.1f", errorMm);
+	ImGui::MetricCard("metric_error", "Active error", buf, "mm",
+		errorMm < 10.0 ? SpaceCalUI::StatusOk() : (errorMm < 25.0 ? SpaceCalUI::StatusWarn() : SpaceCalUI::StatusError()));
+	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
+	snprintf(buf, sizeof(buf), "%.2f", computeMs);
+	ImGui::MetricCard("metric_compute", "Frame compute", buf, "ms", SpaceCalUI::AccentMuted());
+
+	ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + cardH + rowGap));
+	snprintf(buf, sizeof(buf), "%.2f", refJitter);
+	ImGui::MetricCard("metric_ref_jitter", "Reference jitter", buf, "",
+		refJitter < CalCtx.jitterThreshold ? SpaceCalUI::StatusOk() : SpaceCalUI::StatusWarn());
+	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
+	snprintf(buf, sizeof(buf), "%.2f", targetJitter);
+	ImGui::MetricCard("metric_tgt_jitter", "Target jitter", buf, "",
+		targetJitter < CalCtx.jitterThreshold ? SpaceCalUI::StatusOk() : SpaceCalUI::StatusWarn());
+
+	ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + (cardH + rowGap) * 2.0f));
+	snprintf(buf, sizeof(buf), "%.0f", CalCtx.continuousCalibrationThreshold);
+	ImGui::MetricCard("metric_recal", "Recal threshold", buf, "", SpaceCalUI::Accent());
+	ImGui::Dummy(ImVec2(0.0f, cardH));
+}
+
 void CCal_DrawSettings() {
 
-	// panel size for boxes
 	ImVec2 panel_size { ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x, 0 };
 
-	ImGui::BeginGroupPanel("Tip", panel_size);
-	ImGui::Text("Hover over settings to learn more about them!");
-	ImGui::EndGroupPanel();
+	ImGui::HintText("Quest / SLAM tuning is open by default. Advanced alignment controls are collapsed unless you need them.");
 
+	if (ImGui::CollapsingHeader("Quest / SLAM tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::BeginGroupPanel("Stability filters", panel_size);
+		ImGui::LabeledSliderFloat("Jitter threshold", &CalCtx.jitterThreshold, 0.1f, 10.0f, "%.2f",
+			"How much tracking jitter is tolerated before samples are rejected. Lower = stricter.");
+		ImGui::LabeledSliderFloat("Spike reject (m)", &CalCtx.continuousSpikeThresholdM, 0.01f, 0.15f, "%.3f",
+			"Max head-offset jump between samples. Adaptive scaling still applies on SLAM references.");
+		float alignRotSpeedScale = (float)CalCtx.alignmentSpeedParams.align_rot_speed_scale;
+		if (ImGui::LabeledSliderFloat("Yaw blend scale", &alignRotSpeedScale, 0.1f, 1.5f, "%.2f",
+			"Driver rotation lerp vs translation. Lower = slower yaw corrections (~0.45 for Quest).")) {
+			CalCtx.alignmentSpeedParams.align_rot_speed_scale = alignRotSpeedScale;
+		}
+		ImGui::LabeledSliderFloat("Guardian drift (mm)", &CalCtx.guardianDriftTransThresholdM, 0.005f, 0.08f, "%.3f",
+			"Translation delta that triggers a guardian geometry restore.");
+		float guardianYawDeg = CalCtx.guardianDriftYawThresholdRad * 180.0f / static_cast<float>(EIGEN_PI);
+		if (ImGui::LabeledSliderFloat("Guardian drift (deg)", &guardianYawDeg, 1.0f, 15.0f, "%.1f",
+			"Yaw delta that triggers a guardian geometry restore.")) {
+			CalCtx.guardianDriftYawThresholdRad = guardianYawDeg * static_cast<float>(EIGEN_PI / 180.0);
+		}
+		float guardianConfirms = (float)CalCtx.guardianDriftConfirmChecks;
+		if (ImGui::LabeledSliderFloat("Guardian confirms", &guardianConfirms, 1.0f, 8.0f, "%.0f",
+			"Consecutive checks required before applying a guardian restore.")) {
+			CalCtx.guardianDriftConfirmChecks = (int)(guardianConfirms + 0.5f);
+		}
+		ImGui::EndGroupPanel();
+	}
 
-	// @TODO: Group in UI
+	if (ImGui::CollapsingHeader("Recalibration", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::BeginGroupPanel("When to realign", panel_size);
+		ImGui::LabeledSliderFloat("Recalibration threshold", &CalCtx.continuousCalibrationThreshold, 1.01f, 10.0f, "%.1f",
+			"Higher = less frequent realignment. Useful when drift is slow and stable.");
+		ImGui::LabeledSliderFloat("Max relative error", &CalCtx.maxRelativeErrorThreshold, 0.01f, 1.0f, "%.2f",
+			"Poor relative-calibration results above this are discarded.");
+		ImGui::HintText("Controls how often SpaceCalibrator synchronises playspaces.");
+		ImGui::EndGroupPanel();
+	}
 
-	// Section: Alignment speeds
-	{
+	if (ImGui::CollapsingHeader("Offsets & scale", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImVec2 panel_size_inner { panel_size.x - 11 * 2, 0 };
+		ImGui::BeginGroupPanel("Tracker offset", panel_size_inner);
+		DrawVectorElement("cc_tracker_offset", "X", &CalCtx.continuousCalibrationOffset.x());
+		DrawVectorElement("cc_tracker_offset", "Y", &CalCtx.continuousCalibrationOffset.y());
+		DrawVectorElement("cc_tracker_offset", "Z", &CalCtx.continuousCalibrationOffset.z());
+		ImGui::EndGroupPanel();
+
+		ImGui::BeginGroupPanel("Playspace scale", panel_size_inner);
+		DrawVectorElement("cc_playspace_scale", "Scale", &CalCtx.calibratedScale, 1, " 1 ");
+		ImGui::EndGroupPanel();
+	}
+
+	if (ImGui::CollapsingHeader("Advanced alignment", ImGuiTreeNodeFlags_None)) {
 		ImGui::BeginGroupPanel("Calibration speeds", panel_size);
 
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -249,132 +380,11 @@ void CCal_DrawSettings() {
 		}
 
 		ImGui::EndGroupPanel();
-	}
 
-	// Section: Alignment speeds
-	{
 		ImGui::BeginGroupPanel("Alignment speeds", panel_size);
-
-		// ImGui::Separator();
-		// ImGui::Text("Alignment speeds");
 		ScaledDragFloat("Decel", CalCtx.alignmentSpeedParams.align_speed_tiny, 1.0, 0, 2.0, 0);
 		ScaledDragFloat("Slow", CalCtx.alignmentSpeedParams.align_speed_small, 1.0, 0, 2.0, 0);
 		ScaledDragFloat("Fast", CalCtx.alignmentSpeedParams.align_speed_large, 1.0, 0, 2.0, 0);
-		
-		ImGui::EndGroupPanel();
-	}
-	
-
-	// Section: Continuous Calibration settings
-	{
-		ImGui::BeginGroupPanel("Continuous calibration", panel_size);
-		{
-			// @TODO: Reduce code duplication (tooltips)
-			// Recalibration threshold
-			ImGui::Text("Recalibration threshold");
-			ImGui::SameLine();
-			ImGui::PushID("recalibration_threshold");
-			ImGui::SliderFloat("##recalibration_threshold_slider", &CalCtx.continuousCalibrationThreshold, 1.01f, 10.0f, "%1.1f", 0);
-			if (ImGui::IsItemHovered(0)) {
-				ImGui::SetTooltip("Controls how good the calibration must be before realigning the trackers.\n"
-					"Higher values cause calibration to happen less often, and may be useful for systems with lots of tracking drift.");
-			}
-			ImGui::PopID();
-
-			// Recalibration threshold
-			ImGui::Text("Max relative error threshold");
-			ImGui::SameLine();
-			ImGui::PushID("max_relative_error_threshold");
-			ImGui::SliderFloat("##max_relative_error_threshold_slider", &CalCtx.maxRelativeErrorThreshold, 0.01f, 1.0f, "%1.1f", 0);
-			if (ImGui::IsItemHovered(0)) {
-				ImGui::SetTooltip("Controls the maximum acceptable relative error. If the error from the relative calibration is too poor, the calibration will be discarded.");
-			}
-			ImGui::PopID();
-
-			// Jitter threshold
-			ImGui::Text("Jitter threshold");
-			ImGui::SameLine();
-			ImGui::PushID("jtter_threshold");
-			ImGui::SliderFloat("##jitter_threshold_slider", &CalCtx.jitterThreshold, 0.1f, 10.0f, "%1.1f", 0);
-			if (ImGui::IsItemHovered(0)) {
-				ImGui::SetTooltip("Controls how much jitter will be allowed for calibration.\n"
-					"Higher values allow worse tracking to calibrate, but may result in poorer tracking.");
-			}
-			ImGui::PopID();
-
-			ImGui::Text("Spike reject threshold (m)");
-			ImGui::SameLine();
-			ImGui::PushID("continuous_spike_threshold_m");
-			ImGui::SliderFloat("##continuous_spike_threshold_m_slider", &CalCtx.continuousSpikeThresholdM, 0.01f, 0.15f, "%.3f", 0);
-			if (ImGui::IsItemHovered(0)) {
-				ImGui::SetTooltip("Max sample-to-sample head offset jump before rejecting a continuous-cal sample.\nAdaptive scaling still applies on SLAM references.");
-			}
-			ImGui::PopID();
-
-			ImGui::Text("Yaw blend scale");
-			ImGui::SameLine();
-			ImGui::PushID("align_rot_speed_scale");
-			float alignRotSpeedScale = (float)CalCtx.alignmentSpeedParams.align_rot_speed_scale;
-			if (ImGui::SliderFloat("##align_rot_speed_scale_slider", &alignRotSpeedScale, 0.1f, 1.5f, "%.2f", 0)) {
-				CalCtx.alignmentSpeedParams.align_rot_speed_scale = alignRotSpeedScale;
-			}
-			if (ImGui::IsItemHovered(0)) {
-				ImGui::SetTooltip("Driver rotation lerp vs translation. Lower = slower yaw corrections (Quest SLAM preset uses ~0.45).");
-			}
-			ImGui::PopID();
-
-			ImGui::Text("Guardian drift (mm)");
-			ImGui::SameLine();
-			ImGui::PushID("guardian_drift_trans_threshold_m");
-			ImGui::SliderFloat("##guardian_drift_trans_threshold_m_slider", &CalCtx.guardianDriftTransThresholdM, 0.005f, 0.08f, "%.3f", 0);
-			ImGui::PopID();
-
-			ImGui::Text("Guardian drift (deg)");
-			ImGui::SameLine();
-			ImGui::PushID("guardian_drift_yaw_threshold_deg");
-			float guardianYawDeg = CalCtx.guardianDriftYawThresholdRad * 180.0f / static_cast<float>(EIGEN_PI);
-			if (ImGui::SliderFloat("##guardian_drift_yaw_threshold_deg_slider", &guardianYawDeg, 1.0f, 15.0f, "%.1f", 0)) {
-				CalCtx.guardianDriftYawThresholdRad = guardianYawDeg * static_cast<float>(EIGEN_PI / 180.0);
-			}
-			ImGui::PopID();
-
-			ImGui::Text("Guardian confirms");
-			ImGui::SameLine();
-			ImGui::PushID("guardian_drift_confirm_checks");
-			float guardianConfirms = (float)CalCtx.guardianDriftConfirmChecks;
-			if (ImGui::SliderFloat("##guardian_drift_confirm_checks_slider", &guardianConfirms, 1.0f, 8.0f, "%.0f", 0)) {
-				CalCtx.guardianDriftConfirmChecks = (int)(guardianConfirms + 0.5f);
-			}
-			ImGui::PopID();
-
-			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-			ImGui::TextWrapped("Controls how often SpaceCalibrator synchronises playspaces.");
-			ImGui::PopStyleColor();
-			if (ImGui::IsItemHovered(0)) {
-				ImGui::SetTooltip("Controls how good the calibration must be before realigning the trackers.\n"
-					"Higher values cause calibration to happen less often, and may be useful for system with lots of tracking drift.");
-			}
-		}
-
-		{
-			// Tracker offset
-			// ImVec2 panel_size_inner { ImGui::GetCurrentWindow()->DC.ItemWidth, 0};
-			ImVec2 panel_size_inner { panel_size.x - 11 * 2, 0};
-			ImGui::BeginGroupPanel("Tracker offset", panel_size_inner);
-			DrawVectorElement("cc_tracker_offset", "X", &CalCtx.continuousCalibrationOffset.x());
-			DrawVectorElement("cc_tracker_offset", "Y", &CalCtx.continuousCalibrationOffset.y());
-			DrawVectorElement("cc_tracker_offset", "Z", &CalCtx.continuousCalibrationOffset.z());
-			ImGui::EndGroupPanel();
-		}
-
-		{
-			// Playspace offset
-			ImVec2 panel_size_inner{ panel_size.x - 11 * 2, 0 };
-			ImGui::BeginGroupPanel("Playspace scale", panel_size_inner);
-			DrawVectorElement("cc_playspace_scale", "PLayspace Scale", &CalCtx.calibratedScale, 1, " 1 ");
-			ImGui::EndGroupPanel();
-		}
-
 		ImGui::EndGroupPanel();
 	}
 
@@ -438,76 +448,44 @@ inline const char* GetPrettyTrackingSystemName(const std::string& value) {
 }
 
 void CCal_BasicInfo() {
-	if (ImGui::BeginTable("DeviceInfo", 2, 0)) {
-		ImGui::TableSetupColumn("Reference device");
-		ImGui::TableSetupColumn("Target device");
-		ImGui::TableHeadersRow();
+	const char* refTrackingSystem = GetPrettyTrackingSystemName(CalCtx.referenceStandby.trackingSystem);
+	const char* targetTrackingSystem = GetPrettyTrackingSystemName(CalCtx.targetStandby.trackingSystem);
+	const bool refFound = CalCtx.referenceID >= 0;
+	const bool tgtFound = CalCtx.targetID >= 0;
+	const bool refTracking = refFound && CalCtx.ReferencePoseIsValidSimple();
+	const bool tgtTracking = tgtFound && CalCtx.TargetPoseIsValidSimple();
 
-		const char* refTrackingSystem = GetPrettyTrackingSystemName(CalCtx.referenceStandby.trackingSystem);
-		const char* targetTrackingSystem = GetPrettyTrackingSystemName(CalCtx.targetStandby.trackingSystem);
+	const float deviceCardH = ImGui::GetFrameHeight() * 5.0f;
+	DrawDeviceStatusCard("ref_card", "Reference", refTrackingSystem,
+		CalCtx.referenceStandby.model.c_str(), CalCtx.referenceStandby.serial.c_str(),
+		refFound, refTracking);
+	DrawDeviceStatusCard("tgt_card", "Target", targetTrackingSystem,
+		CalCtx.targetStandby.model.c_str(), CalCtx.targetStandby.serial.c_str(),
+		tgtFound, tgtTracking);
+	ImGui::Dummy(ImVec2(0.0f, deviceCardH + ImGui::GetStyle().ItemSpacing.y * 2.0f));
 
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::BeginGroup();
-		ImGui::Text("%s / %s / %s",
-			refTrackingSystem,
-			CalCtx.referenceStandby.model.c_str(),
-			CalCtx.referenceStandby.serial.c_str()
-		);
-		const char* status;
-		if (CalCtx.referenceID < 0) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFF000080);
-			status = "NOT FOUND";
-		} else if (!CalCtx.ReferencePoseIsValidSimple()) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFFFF0080);
-			status = "NOT TRACKING";
-		} else {
-			status = "OK";
-		}
-		ImGui::Text("Status: %s", status);
-		ImGui::EndGroup();
-
-		ImGui::TableSetColumnIndex(1);
-		ImGui::BeginGroup();
-		ImGui::Text("%s / %s / %s",
-			targetTrackingSystem,
-			CalCtx.targetStandby.model.c_str(),
-			CalCtx.targetStandby.serial.c_str()
-		);
-		if (CalCtx.targetID < 0) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFF000080);
-			status = "NOT FOUND";
-		}
-		else if (!CalCtx.TargetPoseIsValidSimple()) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFFFF0080);
-			status = "NOT TRACKING";
-		}
-		else {
-			status = "OK";
-		}
-		ImGui::Text("Status: %s", status);
-		ImGui::EndGroup();
-
-		ImGui::EndTable();
-	}
+	ImGui::BeginGroupPanel("Live metrics", ImVec2(ImGui::GetWindowContentRegionWidth(), 0));
+	DrawLiveMetricsRow();
+	ImGui::EndGroupPanel();
 
 	float width = ImGui::GetWindowContentRegionWidth(), scale = 1.0f;
+	float btnHeight = ImGui::GetTextLineHeight() * 2.2f;
 
-	if (ImGui::BeginTable("##CCal_Cancel", Metrics::enableLogs ? 3 : 2, 0, ImVec2(width * scale, ImGui::GetTextLineHeight() * 2))) {
+	if (ImGui::BeginTable("##CCal_Cancel", Metrics::enableLogs ? 3 : 2, 0, ImVec2(width * scale, btnHeight))) {
 		ImGui::TableNextRow();
 		ImGui::TableSetColumnIndex(0);
-		if (ImGui::Button("Cancel Continuous Calibration", ImVec2(-FLT_MIN, 0.0f))) {
+		if (SpaceCalUI::DangerButton("Stop continuous cal", ImVec2(-FLT_MIN, 0.0f))) {
 			EndContinuousCalibration();
 		}
 
 		ImGui::TableSetColumnIndex(1);
-		if (ImGui::Button("Debug: Force break calibration", ImVec2(-FLT_MIN, 0.0f))) {
+		if (ImGui::Button("Debug: break cal", ImVec2(-FLT_MIN, 0.0f))) {
 			DebugApplyRandomOffset();
 		}
 
 		if (Metrics::enableLogs) {
 			ImGui::TableSetColumnIndex(2);
-			if (ImGui::Button("Debug: Mark logs", ImVec2(-FLT_MIN, 0.0f))) {
+			if (ImGui::Button("Mark logs", ImVec2(-FLT_MIN, 0.0f))) {
 				Metrics::WriteLogAnnotation("MARK LOGS");
 			}
 		}
@@ -516,7 +494,8 @@ void CCal_BasicInfo() {
 	}
 
 	if (CalChains.size() > 1) {
-		ImGui::Text("Multi-platform chains active: %zu", CalChains.size());
+		ImGui::BeginGroupPanel("Multi-platform chains", ImVec2(ImGui::GetWindowContentRegionWidth(), 0));
+		ImGui::Text("Active chains: %zu", CalChains.size());
 		for (size_t i = 0; i < CalChains.size(); i++) {
 			const auto& chain = CalChains[i];
 			ImGui::TextDisabled("  [%zu] %s -> %s%s",
@@ -525,30 +504,37 @@ void CCal_BasicInfo() {
 				chain.targetTrackingSystem.c_str(),
 				chain.continuousActive ? " (cont)" : "");
 		}
+		ImGui::EndGroupPanel();
 	}
 
-	ImGui::Checkbox("Hide tracker", &CalCtx.quashTargetInContinuous);
-	ImGui::SameLine();
-	ImGui::Checkbox("Static recalibration", &CalCtx.enableStaticRecalibration);
-	ImGui::SameLine();
-	ImGui::Checkbox("Enable debug logs", &Metrics::enableLogs);
-	ImGui::SameLine();
-	ImGui::Checkbox("Lock relative transform", &CalCtx.lockRelativePosition);
-	ImGui::SameLine();
-	ImGui::Checkbox("Require triggers", &CalCtx.requireTriggerPressToApply);
-	ImGui::Checkbox("Ignore outliers", &CalCtx.ignoreOutliers);
+	if (ImGui::CollapsingHeader("Behavior", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Lock relative transform", &CalCtx.lockRelativePosition);
+		ImGui::SameLine();
+		ImGui::Checkbox("Hide tracker", &CalCtx.quashTargetInContinuous);
+		ImGui::Checkbox("Static recalibration", &CalCtx.enableStaticRecalibration);
+		ImGui::SameLine();
+		ImGui::Checkbox("Ignore outliers", &CalCtx.ignoreOutliers);
+		ImGui::Checkbox("Require triggers", &CalCtx.requireTriggerPressToApply);
+		ImGui::SameLine();
+		ImGui::Checkbox("Enable debug logs", &Metrics::enableLogs);
+	}
 
-	// Status field...
-
-	ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 1));
-
-	for (const auto& msg : CalCtx.messages) {
-		if (msg.type == CalibrationContext::Message::String) {
-			ImGui::TextWrapped("> %s", msg.str.c_str());
+	ImGui::BeginGroupPanel("Activity log", ImVec2(ImGui::GetWindowContentRegionWidth(), 0));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.05f, 0.07f, 1.0f));
+	if (ImGui::BeginChild("ccal_log", ImVec2(0, ImGui::GetTextLineHeight() * 4.5f), ImGuiChildFlags_Borders)) {
+		for (const auto& msg : CalCtx.messages) {
+			if (msg.type == CalibrationContext::Message::String) {
+				ImGui::PushStyleColor(ImGuiCol_Text, SpaceCalUI::AccentMuted());
+				ImGui::TextUnformatted(">");
+				ImGui::PopStyleColor();
+				ImGui::SameLine();
+				ImGui::TextWrapped("%s", msg.str.c_str());
+			}
 		}
 	}
-
+	ImGui::EndChild();
 	ImGui::PopStyleColor();
+	ImGui::EndGroupPanel();
 
 	ShowCalibrationDebug(1, 3);
 }
@@ -561,27 +547,34 @@ void BuildMenu(bool runningInOverlay)
 
 	if (CalCtx.state == CalibrationState::None)
 	{
+		ImGui::SectionHeading("Space Calibrator",
+			"Align Quest / SLAM head tracking with SteamVR lighthouse body tracking.");
+
 		if (CalCtx.validProfile && !CalCtx.enabled)
 		{
-			ImGui::TextColored(ImVec4(0.8f, 0.2f, 0.2f, 1), "Reference (%s) HMD not detected, profile disabled", GetPrettyTrackingSystemName(CalCtx.referenceTrackingSystem));
-			ImGui::Text("");
+			ImGui::PushStyleColor(ImGuiCol_Text, SpaceCalUI::StatusError());
+			ImGui::TextWrapped("Reference (%s) HMD not detected — saved profile is disabled.",
+				GetPrettyTrackingSystemName(CalCtx.referenceTrackingSystem));
+			ImGui::PopStyleColor();
+			ImGui::Spacing();
 		}
 
 		float width = ImGui::GetWindowContentRegionWidth(), scale = 1.0f;
+		float btnHeight = ImGui::GetTextLineHeight() * 2.2f;
 		if (CalCtx.validProfile)
 		{
 			width -= style.FramePadding.x * 4.0f;
 			scale = 1.0f / 4.0f;
 		}
 
-		if (ImGui::Button("Start Calibration", ImVec2(width * scale, ImGui::GetTextLineHeight() * 2)))
+		if (ImGui::Button("One-shot calibration", ImVec2(width * scale, btnHeight)))
 		{
 			ImGui::OpenPopup("Calibration Progress");
 			StartCalibration();
 		}
 
 		ImGui::SameLine();
-		if (ImGui::Button("Continuous Calibration", ImVec2(width * scale, ImGui::GetTextLineHeight() * 2))) {
+		if (SpaceCalUI::PrimaryButton("Continuous calibration", ImVec2(width * scale, btnHeight))) {
 			StartContinuousCalibration();
 		}
 

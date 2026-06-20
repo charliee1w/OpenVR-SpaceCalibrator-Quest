@@ -3,6 +3,7 @@
 #include "Configuration.h"
 #include "EmbeddedFiles.h"
 #include "UserInterface.h"
+#include "ui_theme.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -157,6 +158,7 @@ void CreateGLFWWindow()
 	ImGui_ImplOpenGL3_Init("#version 330");
 
 	ImGui::StyleColorsDark();
+	SpaceCalUI::ApplyTheme();
 
 	glGenTextures(1, &fboTextureHandle);
 	glBindTexture(GL_TEXTURE_2D, fboTextureHandle);
