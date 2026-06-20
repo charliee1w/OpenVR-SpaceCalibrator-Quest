@@ -120,6 +120,7 @@ struct CalibrationContext
 		alignmentSpeedParams.align_speed_tiny = 1.0f;
 		alignmentSpeedParams.align_speed_small = 1.0f;
 		alignmentSpeedParams.align_speed_large = 2.0f;
+		alignmentSpeedParams.align_rot_speed_scale = 1.0;
 
 		continuousCalibrationThreshold = 1.5f;
 		maxRelativeErrorThreshold = 0.005f;
@@ -169,6 +170,7 @@ struct CalibrationContext
 		guardianDriftConfirmChecks = 3;
 		guardianDriftCooldownFrames = 60;
 		calibrationSpeed = SLOW;
+		alignmentSpeedParams.align_rot_speed_scale = 0.45;
 	}
 
 	struct Chaperone

@@ -10,4 +10,4 @@
 | [ROADMAP.md](./ROADMAP.md) | Phases P0–P6 and logical ceiling |
 | [PUBLISHING.md](./PUBLISHING.md) | Public release checklist for maintainers |
 
-**Current release:** `1.5.1-gore-contcal5`
+**Current release:** `1.5.1-gore-contcal6`

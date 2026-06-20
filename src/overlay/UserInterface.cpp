@@ -302,6 +302,51 @@ void CCal_DrawSettings() {
 			}
 			ImGui::PopID();
 
+			ImGui::Text("Spike reject threshold (m)");
+			ImGui::SameLine();
+			ImGui::PushID("continuous_spike_threshold_m");
+			ImGui::SliderFloat("##continuous_spike_threshold_m_slider", &CalCtx.continuousSpikeThresholdM, 0.01f, 0.15f, "%.3f", 0);
+			if (ImGui::IsItemHovered(0)) {
+				ImGui::SetTooltip("Max sample-to-sample head offset jump before rejecting a continuous-cal sample.\nAdaptive scaling still applies on SLAM references.");
+			}
+			ImGui::PopID();
+
+			ImGui::Text("Yaw blend scale");
+			ImGui::SameLine();
+			ImGui::PushID("align_rot_speed_scale");
+			float alignRotSpeedScale = (float)CalCtx.alignmentSpeedParams.align_rot_speed_scale;
+			if (ImGui::SliderFloat("##align_rot_speed_scale_slider", &alignRotSpeedScale, 0.1f, 1.5f, "%.2f", 0)) {
+				CalCtx.alignmentSpeedParams.align_rot_speed_scale = alignRotSpeedScale;
+			}
+			if (ImGui::IsItemHovered(0)) {
+				ImGui::SetTooltip("Driver rotation lerp vs translation. Lower = slower yaw corrections (Quest SLAM preset uses ~0.45).");
+			}
+			ImGui::PopID();
+
+			ImGui::Text("Guardian drift (mm)");
+			ImGui::SameLine();
+			ImGui::PushID("guardian_drift_trans_threshold_m");
+			ImGui::SliderFloat("##guardian_drift_trans_threshold_m_slider", &CalCtx.guardianDriftTransThresholdM, 0.005f, 0.08f, "%.3f", 0);
+			ImGui::PopID();
+
+			ImGui::Text("Guardian drift (deg)");
+			ImGui::SameLine();
+			ImGui::PushID("guardian_drift_yaw_threshold_deg");
+			float guardianYawDeg = CalCtx.guardianDriftYawThresholdRad * 180.0f / static_cast<float>(EIGEN_PI);
+			if (ImGui::SliderFloat("##guardian_drift_yaw_threshold_deg_slider", &guardianYawDeg, 1.0f, 15.0f, "%.1f", 0)) {
+				CalCtx.guardianDriftYawThresholdRad = guardianYawDeg * static_cast<float>(EIGEN_PI / 180.0);
+			}
+			ImGui::PopID();
+
+			ImGui::Text("Guardian confirms");
+			ImGui::SameLine();
+			ImGui::PushID("guardian_drift_confirm_checks");
+			float guardianConfirms = (float)CalCtx.guardianDriftConfirmChecks;
+			if (ImGui::SliderFloat("##guardian_drift_confirm_checks_slider", &guardianConfirms, 1.0f, 8.0f, "%.0f", 0)) {
+				CalCtx.guardianDriftConfirmChecks = (int)(guardianConfirms + 0.5f);
+			}
+			ImGui::PopID();
+
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			ImGui::TextWrapped("Controls how often SpaceCalibrator synchronises playspaces.");
 			ImGui::PopStyleColor();

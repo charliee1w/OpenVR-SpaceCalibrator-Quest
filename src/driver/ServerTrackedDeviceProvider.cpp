@@ -24,6 +24,7 @@ vr::EVRInitError ServerTrackedDeviceProvider::Init(vr::IVRDriverContext *pDriver
 	alignmentSpeedParams.align_speed_tiny = 0.05f;
 	alignmentSpeedParams.align_speed_small = 0.2f;
 	alignmentSpeedParams.align_speed_large = 2.0f;
+	alignmentSpeedParams.align_rot_speed_scale = 1.0;
 
 	InjectHooks(this, pDriverContext);
 	server.Run();
@@ -143,13 +144,18 @@ void ServerTrackedDeviceProvider::BlendTransform(DeviceTransform& device, const 
 	double lerp = (timestamp.QuadPart - device.lastPoll.QuadPart) / (double)freq.QuadPart;
 	device.lastPoll = timestamp;
 	
-	lerp *= GetTransformRate(device.currentRate);
-	if (lerp > 1.0)
-		lerp = 1.0;
-	if (lerp < 0 || isnan(lerp))
-		lerp = 0;
+	double rate = GetTransformRate(device.currentRate);
+	double transLerp = lerp * rate;
+	double rotScale = alignmentSpeedParams.align_rot_speed_scale;
+	if (rotScale < 0) rotScale = 0;
+	if (rotScale > 2.0) rotScale = 2.0;
+	double rotLerp = transLerp * rotScale;
+	if (transLerp > 1.0) transLerp = 1.0;
+	if (rotLerp > 1.0) rotLerp = 1.0;
+	if (transLerp < 0 || isnan(transLerp)) transLerp = 0;
+	if (rotLerp < 0 || isnan(rotLerp)) rotLerp = 0;
 
-	device.transform = device.transform.interpolateAround(lerp, device.targetTransform, deviceWorldPose.translation);
+	device.transform = device.transform.interpolateAround(transLerp, rotLerp, device.targetTransform, deviceWorldPose.translation);
 }
 
 void ServerTrackedDeviceProvider::ApplyTransform(DeviceTransform& device, vr::DriverPose_t& devicePose) const {

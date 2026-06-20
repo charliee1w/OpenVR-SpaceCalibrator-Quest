@@ -136,6 +136,9 @@ namespace protocol
 		 * (We actually do a lerp(s * delta_t) where s is the speed factor here)
 		 */
 		double align_speed_tiny, align_speed_small, align_speed_large;
+
+		/** Multiplier on rotation lerp vs translation (1 = same speed; <1 = slower yaw). */
+		double align_rot_speed_scale = 1.0;
 	};
 
 	struct SetDeviceTransform

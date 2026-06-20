@@ -65,6 +65,7 @@ static void VisitAlignmentParams(CalibrationContext& ctx, std::function<void(con
 	P(align_speed_tiny);
 	P(align_speed_small);
 	P(align_speed_large);
+	P(align_rot_speed_scale);
 	P(thr_trans_tiny);
 	P(thr_trans_small);
 	P(thr_trans_large);
@@ -191,6 +192,24 @@ static void ParseChainObject(const picojson::object& obj, CalibrationChain& chai
 		if (obj.count("max_relative_error_threshold") && obj.at("max_relative_error_threshold").is<double>()) {
 			sharedCtx.maxRelativeErrorThreshold = (float)obj.at("max_relative_error_threshold").get<double>();
 		}
+		if (obj.count("continuous_spike_threshold_m") && obj.at("continuous_spike_threshold_m").is<double>()) {
+			sharedCtx.continuousSpikeThresholdM = (float)obj.at("continuous_spike_threshold_m").get<double>();
+		}
+		if (obj.count("guardian_drift_trans_threshold_m") && obj.at("guardian_drift_trans_threshold_m").is<double>()) {
+			sharedCtx.guardianDriftTransThresholdM = (float)obj.at("guardian_drift_trans_threshold_m").get<double>();
+		}
+		if (obj.count("guardian_drift_yaw_threshold_deg") && obj.at("guardian_drift_yaw_threshold_deg").is<double>()) {
+			sharedCtx.guardianDriftYawThresholdRad = (float)(obj.at("guardian_drift_yaw_threshold_deg").get<double>() * EIGEN_PI / 180.0);
+		}
+		if (obj.count("guardian_drift_confirm_checks") && obj.at("guardian_drift_confirm_checks").is<double>()) {
+			sharedCtx.guardianDriftConfirmChecks = (int)obj.at("guardian_drift_confirm_checks").get<double>();
+		}
+		if (obj.count("guardian_drift_cooldown_frames") && obj.at("guardian_drift_cooldown_frames").is<double>()) {
+			sharedCtx.guardianDriftCooldownFrames = (int)obj.at("guardian_drift_cooldown_frames").get<double>();
+		}
+		if (obj.count("auto_recal_on_guardian_drift") && obj.at("auto_recal_on_guardian_drift").is<bool>()) {
+			sharedCtx.autoRecalOnGuardianDrift = obj.at("auto_recal_on_guardian_drift").get<bool>();
+		}
 		if (obj.count("calibration_speed") && obj.at("calibration_speed").is<double>()) {
 			sharedCtx.calibrationSpeed = (CalibrationContext::Speed)(int)obj.at("calibration_speed").get<double>();
 		}
@@ -304,6 +323,12 @@ static picojson::object WriteChainObject(const CalibrationChain& chain, Calibrat
 		SetJsonBool(profile, "static_calibration", ctx.enableStaticRecalibration);
 		SetJsonNumber(profile, "jitter_threshold", (double)ctx.jitterThreshold);
 		SetJsonNumber(profile, "max_relative_error_threshold", (double)ctx.maxRelativeErrorThreshold);
+		SetJsonNumber(profile, "continuous_spike_threshold_m", (double)ctx.continuousSpikeThresholdM);
+		SetJsonNumber(profile, "guardian_drift_trans_threshold_m", (double)ctx.guardianDriftTransThresholdM);
+		SetJsonNumber(profile, "guardian_drift_yaw_threshold_deg", (double)(ctx.guardianDriftYawThresholdRad * 180.0 / EIGEN_PI));
+		SetJsonNumber(profile, "guardian_drift_confirm_checks", (double)ctx.guardianDriftConfirmChecks);
+		SetJsonNumber(profile, "guardian_drift_cooldown_frames", (double)ctx.guardianDriftCooldownFrames);
+		SetJsonBool(profile, "auto_recal_on_guardian_drift", ctx.autoRecalOnGuardianDrift);
 		SetJsonNumber(profile, "calibration_speed", (double)ctx.calibrationSpeed);
 		if (ctx.chaperone.valid) {
 			picojson::object chaperone;

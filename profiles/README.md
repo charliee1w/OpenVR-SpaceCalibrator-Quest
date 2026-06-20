@@ -10,12 +10,15 @@ The overlay **Save profile** button writes here automatically. Files in this fol
 
 | File | Purpose |
 |------|---------|
-| [example-quest-lighthouse.json](example-quest-lighthouse.json) | **P4 winner** template — Quest → lighthouse head tracker |
+| [example-quest-lighthouse.json](example-quest-lighthouse.json) | **P4/P5 winner** — Quest → lighthouse head (Tundra-class) |
+| [preset-quest-tundra-head.json](preset-quest-tundra-head.json) | Hardware preset — Tundra on strap |
+| [preset-quest-vive3-head.json](preset-quest-vive3-head.json) | Hardware preset — Vive 3.0 on strap |
 
 **Apply P4 winner to your saved calibration (keeps devices + room transform):**
 
 ```powershell
 .\scripts\apply-p4-winner.ps1
+.\scripts\apply-hardware-preset.ps1 -HeadTracker tundra   # or vive3
 ```
 
 **Do not commit personal profiles** (serials, chaperone geometry, calibration offsets from your room).

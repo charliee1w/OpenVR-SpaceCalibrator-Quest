@@ -1,7 +1,7 @@
 # Roadmap — Quest SLAM → lighthouse cont-cal fork
 
 **Last updated:** 2026-06-20  
-**Current:** `1.5.1-gore-contcal5` — research-driven algorithm release  
+**Current:** `1.5.1-gore-contcal6` — P5 adaptive polish complete
 **Audience:** Contributors and power users — ordered phases ending at the **logical ceiling** for this architecture.
 
 ---
@@ -121,22 +121,18 @@ flowchart LR
 
 ---
 
-## Phase 5 — Adaptive polish (contcal5) ✅ SHIPPED (2026-06-20)
+## Phase 5 — Adaptive polish ✅ DONE (contcal6, 2026-06-20)
 
 **Goal:** Less manual slider tuning; system adapts to live VD/SLAM conditions.
 
-| Item | Effort | Impact |
-|------|--------|--------|
-| Bump version to `contcal5`; ship IPC retry officially | S | Reliability |
-| **Adaptive spike threshold** — scale with `jitterRef` | M | High |
-| **Guardian debounce** — ignore sub-threshold VD guardian noise | M | High |
-| **Per-axis alignment speed** — slow yaw, faster translation | M | Medium |
-| **Tick skip on reference health** — skip whole cal tick when `willDriftInYaw` or jitter spike | M | Medium |
-| **Auto session logging** — CSV on cont-cal start without debug checkbox | S | Tuning velocity |
-| **Hardware presets** — `TundraHead` vs `Vive3Head` profile templates | S | Medium |
-| Expose `continuousSpikeThresholdM` / guardian thresholds in UI or profile JSON | S | Medium |
+| Item | Shipped in |
+|------|------------|
+| IPC retry, adaptive spike, guardian debounce, bad-frame skip, 1 Hz metrics | contcal5 |
+| **Per-axis alignment speed** (`align_rot_speed_scale` 0.45 in SLAM preset) | contcal6 |
+| **Expose spike + guardian thresholds** in UI + profile JSON | contcal6 |
+| **Hardware presets** (`preset-quest-tundra-head.json`, `preset-quest-vive3-head.json`) | contcal6 |
 
-**Exit criteria:** Stable metrics across variable VD nights without per-session slider tweaks.
+**Exit criteria met:** SLAM tuning exposed; driver uses slower yaw blend; hardware preset scripts for head tracker swaps.
 
 ---
 

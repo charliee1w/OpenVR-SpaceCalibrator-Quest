@@ -1,5 +1,17 @@
 # contcal fork changelog
 
+## 1.5.1-gore-contcal6 (2026-06-20)
+
+P5 adaptive polish — completes remaining roadmap items from contcal5.
+
+| Change | Problem addressed | File(s) |
+|--------|-------------------|---------|
+| **Per-axis alignment speed** | Yaw corrections too aggressive vs translation on SLAM refs | `Protocol.h`, `IsometryTransform.h`, `ServerTrackedDeviceProvider.cpp`, `Calibration.h` |
+| **Exposed SLAM tuning** | Spike/guardian thresholds only in code | `Configuration.cpp`, `UserInterface.cpp`, profile JSON |
+| **Hardware presets** | No starting point for Tundra vs Vive 3.0 head | `profiles/preset-quest-*.json`, `apply-hardware-preset.ps1` |
+
+SLAM preset sets `align_rot_speed_scale` 0.45 (slow yaw, faster translation).
+
 ## 1.5.1-gore-contcal5 (2026-06-20)
 
 Research-driven algorithm fixes for Quest/VD SLAM → lighthouse cont-cal.

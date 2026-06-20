@@ -6,7 +6,7 @@
 
 # OpenVR-SpaceCalibrator — Quest SLAM continuous calibration fork
 
-**Version:** `1.5.1-gore-contcal5`  
+**Version:** `1.5.1-gore-contcal6`  
 **Base:** [hyblocker/OpenVR-SpaceCalibrator](https://github.com/hyblocker/OpenVR-SpaceCalibrator) `develop`  
 **License:** MIT (see [LICENSE](LICENSE))
 
@@ -105,7 +105,7 @@ Enable **autostart continuous calibration** in the overlay and save your profile
 
 ### Option A — Build from source (recommended for this fork)
 
-See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. There is no official release binary yet for `contcal5`.
+See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. Prebuilt binaries: [GitHub Releases](https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest/releases) (`contcal6` pending upload).
 
 ### Option B — Steam Space Calibrator + replace binaries
 
@@ -199,7 +199,7 @@ Or manually copy from `bin/artifacts/Release` and `bin/driver_01spacecalibrator/
 
 ```powershell
 Test-Path "SteamVR\drivers\01spacecalibrator\bin\win64\driver_01spacecalibrator.dll"
-# Driver log should show: 1.5.1-gore-contcal5 loaded
+# Driver log should show: 1.5.1-gore-contcal6 loaded
 ```
 
 ---
