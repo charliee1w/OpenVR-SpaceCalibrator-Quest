@@ -18,7 +18,7 @@ Use this before making the repository public on GitHub.
 
 ```powershell
 git remote set-url origin https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest.git
-git push -u origin contcal5-release
+git push -u origin main
 git push origin v1.5.1-contcal5
 ```
 
