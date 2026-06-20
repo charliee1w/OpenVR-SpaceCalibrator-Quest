@@ -8,6 +8,11 @@
 #include <deque>
 
 #include "Protocol.h"
+#include "TrackingQuality.h"
+#include "GuardianDrift.h"
+#include "CalibrationCalc.h"
+#include "IPCClient.h"
+
 
 enum class CalibrationState
 {
@@ -46,7 +51,7 @@ struct CalibrationContext
 	bool validProfile = false;
 	bool clearOnLog = false;
 	bool quashTargetInContinuous = false;
-	double timeLastTick = 0, timeLastScan = 0, timeLastAssign = 0;
+	double timeLastTick = 0, timeLastScan = 0, timeLastAssign = 0, timeLastPeriodicLog = 0;
 	bool ignoreOutliers = false;
 	double wantedUpdateInterval = 1.0;
 	float jitterThreshold = 3.0f;
@@ -55,11 +60,29 @@ struct CalibrationContext
 	bool wasWaitingForTriggers = false;
 	bool hasAppliedCalibrationResult = false;
 
-	float xprev, yprev, zprev;
-
 	float continuousCalibrationThreshold;
 	float maxRelativeErrorThreshold = 0.005f;
 	Eigen::Vector3d continuousCalibrationOffset;
+
+	static constexpr size_t ContinuousSampleCount = 40;
+	float continuousSpikeThresholdM = 0.06f;
+	int continuousFrozenFrameThreshold = 6;
+	bool pauseOnReferenceJitter = true;
+	bool slamReference = false;
+	bool applyHeadModelToReference = true;
+	bool rejectYawDriftPoses = true;
+	bool trustTargetYaw = true;
+	bool compensatePoseTimeOffset = true;
+	float maxReferencePoseTimeOffset = 0.04f;
+	float maxPoseTimeSkew = 0.05f;
+
+	float guardianDriftTransThresholdM = 0.02f;
+	float guardianDriftYawThresholdRad = 3.0f * static_cast<float>(EIGEN_PI / 180.0);
+	int guardianDriftConfirmChecks = 2;
+	int guardianDriftCooldownFrames = 20;
+
+	DeviceTrackingState referenceTracking;
+	LARGE_INTEGER devicePoseSampleTime[vr::k_unMaxTrackedDeviceCount];
 
 	protocol::AlignmentSpeedParams alignmentSpeedParams;
 	bool enableStaticRecalibration;
@@ -81,6 +104,7 @@ struct CalibrationContext
 	CalibrationContext() {
 		calibratedScale = 1.0;
 		memset(devicePoses, 0, sizeof(devicePoses));
+		memset(devicePoseSampleTime, 0, sizeof(devicePoseSampleTime));
 		ResetConfig();
 	}
 
@@ -99,11 +123,52 @@ struct CalibrationContext
 
 		continuousCalibrationThreshold = 1.5f;
 		maxRelativeErrorThreshold = 0.005f;
-		jitterThreshold = 3.0f;
+		jitterThreshold = 0.08f;
 
 		continuousCalibrationOffset = Eigen::Vector3d::Zero();
+		continuousSpikeThresholdM = 0.06f;
+		continuousFrozenFrameThreshold = 6;
+		pauseOnReferenceJitter = true;
 
-		enableStaticRecalibration = false;
+		enableStaticRecalibration = true;
+		slamReference = false;
+		applyHeadModelToReference = true;
+		rejectYawDriftPoses = true;
+		trustTargetYaw = true;
+		compensatePoseTimeOffset = true;
+		maxReferencePoseTimeOffset = 0.04f;
+		maxPoseTimeSkew = 0.05f;
+	}
+
+	float EffectiveSpikeThresholdM(const CalibrationCalc& calc) const {
+		float threshold = continuousSpikeThresholdM;
+		if (slamReference && calc.SampleCount() >= 3) {
+			const double jitter = calc.ReferenceJitter();
+			const double scale = 1.0 + std::min(jitter / 0.05, 2.5);
+			threshold = static_cast<float>(continuousSpikeThresholdM * scale);
+		}
+		return threshold;
+	}
+
+	// Tuned for Quest/VD/SLAM reference + lighthouse head tracker (see audit logs).
+	void ApplySlamReferencePreset() {
+		enableStaticRecalibration = true;
+		pauseOnReferenceJitter = false;
+		continuousSpikeThresholdM = 0.05f;
+		continuousFrozenFrameThreshold = 5;
+		jitterThreshold = 0.15f;
+		maxRelativeErrorThreshold = 0.008f;
+		applyHeadModelToReference = true;
+		rejectYawDriftPoses = true;
+		trustTargetYaw = true;
+		compensatePoseTimeOffset = true;
+		maxReferencePoseTimeOffset = 0.04f;
+		maxPoseTimeSkew = 0.05f;
+		guardianDriftTransThresholdM = 0.035f;
+		guardianDriftYawThresholdRad = 5.0f * static_cast<float>(EIGEN_PI / 180.0);
+		guardianDriftConfirmChecks = 3;
+		guardianDriftCooldownFrames = 60;
+		calibrationSpeed = SLOW;
 	}
 
 	struct Chaperone
@@ -118,6 +183,9 @@ struct CalibrationContext
 		};
 		vr::HmdVector2_t playSpaceSize = { 0.0f, 0.0f };
 	} chaperone;
+
+	bool autoRecalOnGuardianDrift = true;
+	GuardianDriftState guardianDrift;
 
 	void ClearLogOnMessage() {
 		clearOnLog = true;
@@ -143,6 +211,10 @@ struct CalibrationContext
 
 	size_t SampleCount()
 	{
+		if (state == CalibrationState::Continuous || state == CalibrationState::ContinuousStandby) {
+			return ContinuousSampleCount;
+		}
+
 		switch (calibrationSpeed)
 		{
 		case FAST:
@@ -210,6 +282,19 @@ struct CalibrationContext
 };
 
 extern CalibrationContext CalCtx;
+extern IPCClient Driver;
+
+bool CollectSampleForChain(
+	CalibrationContext& ctx,
+	CalibrationCalc& calc,
+	int referenceID,
+	int targetID,
+	const Eigen::Vector3d& targetOffset,
+	bool slamReference,
+	bool lockRelativePosition
+);
+struct CalibrationChain;
+void ApplyChainCalibration(const CalibrationChain& chain, bool lerp);
 
 void InitCalibrator();
 void CalibrationTick(double time);

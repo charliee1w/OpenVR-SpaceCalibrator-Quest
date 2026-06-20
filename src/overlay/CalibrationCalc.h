@@ -94,12 +94,21 @@ public:
 
 	void PushSample(const Sample& sample);
 	void Clear();
+	void ResetContinuousGuards();
 
 	double ReferenceJitter() const;
 	double TargetJitter() const;
 
+	Eigen::Vector3d ComputeRigidRefToTargetOffset(const Pose& ref, const Pose& target) const;
+	bool ShouldRejectContinuousSample(const Eigen::Vector3d& instantOffset, float spikeThresholdM) const;
+	void NoteContinuousSampleOffset(const Eigen::Vector3d& instantOffset);
+
+	Pose EffectiveReferencePose(const Sample& sample) const;
+	Sample EffectiveSample(const Sample& sample) const;
+
 	bool ComputeOneshot(const bool ignoreOutliers);
 	bool ComputeIncremental(bool &lerp, double threshold, double relPoseMaxError, const bool ignoreOutliers);
+	void RecordLiveMetrics(const Pose& refPose, const Pose& targetPose);
 
 	size_t SampleCount() const {
 		return m_samples.size();
@@ -108,6 +117,8 @@ public:
 	void ShiftSample() {
 		if (!m_samples.empty()) m_samples.pop_front();
 	}
+
+	void PruneRecentSamples(size_t count);
 
 	CalibrationCalc() : m_isValid(false), m_calcCycle(0), enableStaticRecalibration(true) {}
 
@@ -128,6 +139,12 @@ private:
 	Eigen::AffineCompact3d m_refToTargetPose = Eigen::AffineCompact3d::Identity();
 
 	std::deque<Sample> m_samples;
+
+	bool m_hasLastInstantOffset = false;
+	Eigen::Vector3d m_lastInstantOffset = Eigen::Vector3d::Zero();
+	bool m_hasLastRawPosOffset = false;
+	Eigen::Vector3d m_lastRawPosOffset = Eigen::Vector3d::Zero();
+	int m_frozenOffsetFrames = 0;
 
 	std::vector<bool> DetectOutliers() const;
 	Eigen::Vector3d CalibrateRotation(const bool ignoreOutliers) const;

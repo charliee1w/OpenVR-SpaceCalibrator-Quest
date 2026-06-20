@@ -1,1 +1,9 @@
-You may find the source code of this program at https://github.com/hyblocker/OpenVR-SpaceCalibrator . You should also have a LICENSE file alongside this one.
+OpenVR-SpaceCalibrator — Quest SLAM continuous calibration fork (contcal series)
+
+Upstream: https://github.com/hyblocker/OpenVR-SpaceCalibrator
+Original: https://github.com/pushrax/OpenVR-SpaceCalibrator
+
+This fork adds SLAM-reference tuning for Quest/Virtual Desktop + lighthouse
+FBT continuous calibration. See docs/CHANGELOG-contcal.md for fork-specific changes.
+
+Licensed under MIT — see LICENSE.

@@ -21,5 +21,7 @@ struct VRState
 
 	[[nodiscard]] int FindDevice(const std::string& trackingSystem, const std::string& model, const std::string& serial) const;
 
+	static bool IsSlamTrackingSystem(const std::string& trackingSystem);
+
 	static VRState Load();
 };

@@ -1,14 +1,30 @@
 ---
 name: Bug report
-about: Something is broken
-title: ''
+about: Report a SpaceCal cont-cal issue (especially Quest / VD / SLAM setups)
+title: "[bug] "
 labels: bug
-assignees: ''
-
 ---
 
-<!--
-If you are having trouble setting this up with SteamVR and would like help, the fastest way is to ask in the Discord group. https://discord.com/invite/m7g2Wyj
+**Version** (driver log line): e.g. `1.5.1-gore-contcal5`
 
-If you are having issues after updating SteamVR, please check for a new release at https://github.com/pushrax/OpenVR-SpaceCalibrator/releases before posting an issue.
--->
+**Setup**
+- HMD + streamer: (e.g. Quest Pro + Virtual Desktop)
+- Head tracker: (e.g. Tundra / Vive 3.0)
+- Body tracking: (e.g. lighthouse trackers + Standable)
+- Chain: reference → target (e.g. `oculus` → `lighthouse`)
+
+**What happened**
+
+**What you expected**
+
+**Logs** (attach or paste tail)
+- [ ] `space_calibrator_driver.log`
+- [ ] `spacecal_log.*.txt` from `%LOCALAPPDATA%\..\LocalLow\SpaceCalibrator\Logs\`
+- [ ] Relevant `vrserver.txt` lines
+
+**Repro steps**
+1.
+2.
+3.
+
+**Continuous cal active?** (autostart or manual button — saved-only mode does not refine)

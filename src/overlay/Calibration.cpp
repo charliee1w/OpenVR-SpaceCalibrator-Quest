@@ -4,6 +4,8 @@
 #include "Configuration.h"
 #include "IPCClient.h"
 #include "CalibrationCalc.h"
+#include "CalibrationChain.h"
+#include "GuardianDrift.h"
 #include "VRState.h"
 
 #include <string>
@@ -127,7 +129,18 @@ namespace {
 		return ds;
 	}
 
-	Pose ConvertPose(const vr::DriverPose_t &driverPose) {
+	double PoseSampleAgeSeconds(const CalibrationContext& ctx, int deviceId) {
+		LARGE_INTEGER now, freq;
+		QueryPerformanceCounter(&now);
+		QueryPerformanceFrequency(&freq);
+		const auto& ts = ctx.devicePoseSampleTime[deviceId];
+		if (ts.QuadPart == 0) {
+			return 0.0;
+		}
+		return (now.QuadPart - ts.QuadPart) / (double)freq.QuadPart;
+	}
+
+	Pose ConvertPose(const vr::DriverPose_t &driverPose, bool applyHeadModel = false, bool compensateLatency = false) {
 		Eigen::Quaterniond driverToWorldQ(
 			driverPose.qWorldFromDriverRotation.w,
 			driverPose.qWorldFromDriverRotation.x,
@@ -140,67 +153,191 @@ namespace {
 			driverPose.vecWorldFromDriverTranslation[2]
 		);
 
-		Eigen::Quaterniond driverRot = driverToWorldQ * Eigen::Quaterniond(
+		Eigen::Quaterniond deviceQ(
 			driverPose.qRotation.w,
 			driverPose.qRotation.x,
 			driverPose.qRotation.y,
 			driverPose.qRotation.z
 		);
-		
-		Eigen::Vector3d driverPos = driverToWorldV + driverToWorldQ * Eigen::Vector3d(
+		Eigen::Vector3d devicePos(
 			driverPose.vecPosition[0],
 			driverPose.vecPosition[1],
 			driverPose.vecPosition[2]
 		);
+
+		Eigen::Quaterniond bodyQ = deviceQ;
+		Eigen::Vector3d bodyPos = devicePos;
+		if (applyHeadModel || driverPose.shouldApplyHeadModel) {
+			Eigen::Quaterniond headFromDriverQ(
+				driverPose.qDriverFromHeadRotation.w,
+				driverPose.qDriverFromHeadRotation.x,
+				driverPose.qDriverFromHeadRotation.y,
+				driverPose.qDriverFromHeadRotation.z
+			);
+			Eigen::Vector3d headFromDriverV(
+				driverPose.vecDriverFromHeadTranslation[0],
+				driverPose.vecDriverFromHeadTranslation[1],
+				driverPose.vecDriverFromHeadTranslation[2]
+			);
+			bodyQ = deviceQ * headFromDriverQ;
+			bodyPos = devicePos + deviceQ * headFromDriverV;
+		}
+
+		if (compensateLatency && std::abs(driverPose.poseTimeOffset) > 1e-5) {
+			const double t = driverPose.poseTimeOffset;
+			Eigen::Vector3d linearVel(
+				driverPose.vecVelocity[0],
+				driverPose.vecVelocity[1],
+				driverPose.vecVelocity[2]
+			);
+			bodyPos += bodyQ * linearVel * t;
+
+			Eigen::Vector3d angularVel(
+				driverPose.vecAngularVelocity[0],
+				driverPose.vecAngularVelocity[1],
+				driverPose.vecAngularVelocity[2]
+			);
+			const double angle = angularVel.norm() * t;
+			if (angle > 1e-6) {
+				Eigen::AngleAxisd axisAngle(angle, angularVel.normalized());
+				bodyQ = Eigen::Quaterniond(axisAngle) * bodyQ;
+			}
+		}
+
+		Eigen::Quaterniond driverRot = driverToWorldQ * bodyQ;
+		Eigen::Vector3d driverPos = driverToWorldV + driverToWorldQ * bodyPos;
 
 		Eigen::AffineCompact3d xform = Eigen::Translation3d(driverPos) * driverRot;
 
 		return Pose(xform);
 	}
 
-	bool CollectSample(const CalibrationContext& ctx)
-	{
-		vr::DriverPose_t reference, target;
-		reference.poseIsValid = false;
-		reference.result = vr::ETrackingResult::TrackingResult_Uninitialized;
-		target.poseIsValid = false;
-		target.result = vr::ETrackingResult::TrackingResult_Uninitialized;
-
-		reference = ctx.devicePoses[ctx.referenceID];
-		target = ctx.devicePoses[ctx.targetID];
-
-		bool ok = true;
-		if (!reference.poseIsValid && reference.result != vr::ETrackingResult::TrackingResult_Running_OK)
-		{
-			CalCtx.Log("Reference device is not tracking\n"); ok = false;
+	bool PosePassesQualityGate(const vr::DriverPose_t& pose, const char* label, bool rejectYawDrift) {
+		if (!pose.poseIsValid || pose.result != vr::ETrackingResult::TrackingResult_Running_OK) {
+			char buf[128];
+			snprintf(buf, sizeof buf, "%s pose rejected: invalid tracking (valid=%d result=%d)\n",
+				label, pose.poseIsValid, pose.result);
+			CalCtx.Log(buf);
+			return false;
 		}
-		if (!target.poseIsValid && target.result != vr::ETrackingResult::TrackingResult_Running_OK)
-		{
-			CalCtx.Log("Target device is not tracking\n"); ok = false;
+		if (rejectYawDrift && pose.willDriftInYaw) {
+			char buf[128];
+			snprintf(buf, sizeof buf, "%s pose rejected: SLAM yaw drift warning\n", label);
+			CalCtx.Log(buf);
+			return false;
 		}
-		if (!ok)
-		{
-			if (CalCtx.state != CalibrationState::Continuous) {
-				CalCtx.Log("Aborting calibration!\n");
-				CalCtx.state = CalibrationState::None;
+		return true;
+	}
+
+	bool CollectSampleForChainImpl(
+	CalibrationContext& ctx,
+	CalibrationCalc& calc,
+	int referenceID,
+	int targetID,
+	const Eigen::Vector3d& targetOffset,
+	bool slamReference,
+	bool lockRelativePosition)
+{
+	if (referenceID < 0 || targetID < 0
+		|| referenceID >= vr::k_unMaxTrackedDeviceCount
+		|| targetID >= vr::k_unMaxTrackedDeviceCount) {
+		return false;
+	}
+
+	vr::DriverPose_t reference = ctx.devicePoses[referenceID];
+	vr::DriverPose_t target = ctx.devicePoses[targetID];
+
+	const bool rejectRefYawDrift = slamReference && ctx.rejectYawDriftPoses;
+	bool ok = PosePassesQualityGate(reference, "Reference", rejectRefYawDrift)
+		&& PosePassesQualityGate(target, "Target", false);
+	if (!ok) {
+		if (ctx.state == CalibrationState::Continuous) {
+			calc.PruneRecentSamples(4);
+			return false;
+		}
+		ctx.Log("Aborting calibration!\n");
+		ctx.state = CalibrationState::None;
+		return false;
+	}
+
+	if (ctx.state == CalibrationState::Continuous || ctx.state == CalibrationState::ContinuousStandby) {
+		reference.vecPosition[0] += targetOffset.x();
+		reference.vecPosition[1] += targetOffset.y();
+		reference.vecPosition[2] += targetOffset.z();
+	}
+
+	if (slamReference && ctx.compensatePoseTimeOffset) {
+		if (std::abs(reference.poseTimeOffset) > ctx.maxReferencePoseTimeOffset) {
+			if (ctx.state == CalibrationState::Continuous) {
+				return false;
 			}
+			ctx.Log("Reference pose rejected: IMU extrapolation latency\n");
 			return false;
 		}
 
-		// Apply tracker offsets
-		if (CalCtx.state == CalibrationState::Continuous || CalCtx.state == CalibrationState::ContinuousStandby) {
-			reference.vecPosition[0] += ctx.continuousCalibrationOffset.x();
-			reference.vecPosition[1] += ctx.continuousCalibrationOffset.y();
-			reference.vecPosition[2] += ctx.continuousCalibrationOffset.z();
+		const double skew = std::abs(
+			PoseSampleAgeSeconds(ctx, referenceID) - PoseSampleAgeSeconds(ctx, targetID)
+		);
+		if (skew > ctx.maxPoseTimeSkew) {
+			if (ctx.state == CalibrationState::Continuous) {
+				return false;
+			}
+			ctx.Log("Pose pair rejected: ref/target sample time skew\n");
+			return false;
+		}
+	}
+
+	const bool compensateLatency = slamReference && ctx.compensatePoseTimeOffset;
+	Pose refPose = ConvertPose(reference, slamReference && ctx.applyHeadModelToReference, compensateLatency);
+	const Pose targetPose = ConvertPose(target, false, false);
+
+	if (slamReference && ctx.trustTargetYaw && calc.isRelativeTransformationCalibrated()) {
+		refPose.rot = targetPose.rot * calc.RelativeTransformation().rotation().inverse();
+	}
+
+	if (ctx.state == CalibrationState::Continuous) {
+		const Eigen::Vector3d instantOffset = calc.ComputeRigidRefToTargetOffset(refPose, targetPose);
+		if (calc.ShouldRejectContinuousSample(instantOffset, ctx.EffectiveSpikeThresholdM(calc))) {
+			return false;
+		}
+		calc.NoteContinuousSampleOffset(instantOffset);
+	}
+
+	calc.PushSample(Sample(refPose, targetPose, glfwGetTime()));
+	(void)lockRelativePosition;
+	return true;
+	}
+
+	void ApplyChainCalibrationImpl(const CalibrationChain& chain, bool lerp)
+	{
+	if (!chain.valid || chain.targetID < 0) {
+		return;
+	}
+
+	auto vrTrans = VRTranslationVec(chain.calibratedTranslation);
+	auto vrRot = VRRotationQuat(chain.calibratedRotation);
+
+	for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id) {
+		auto deviceClass = vr::VRSystem()->GetTrackedDeviceClass(id);
+		if (deviceClass == vr::TrackedDeviceClass_Invalid || id == vr::k_unTrackedDeviceIndex_Hmd) {
+			continue;
 		}
 
-		calibration.PushSample(Sample(
-			ConvertPose(reference),
-			ConvertPose(target),
-			glfwGetTime()
-		));
+		char buffer[vr::k_unMaxPropertyStringSize] = {};
+		vr::ETrackedPropertyError err = vr::TrackedProp_Success;
+		vr::VRSystem()->GetStringTrackedDeviceProperty(id, vr::Prop_TrackingSystemName_String, buffer, sizeof(buffer), &err);
+		if (err != vr::TrackedProp_Success || std::string(buffer) != chain.targetTrackingSystem) {
+			continue;
+		}
 
-		return true;
+		protocol::Request req(protocol::RequestSetDeviceTransform);
+		req.setDeviceTransform = { id, true, vrTrans, vrRot, chain.calibratedScale };
+		req.setDeviceTransform.lerp = lerp;
+		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous
+			&& (int)id == chain.targetID
+			&& CalCtx.quashTargetInContinuous;
+		Driver.SendBlocking(req);
+	}
 	}
 
 	bool AssignTargets() {
@@ -226,8 +363,41 @@ namespace {
 			}
 		}
 
+		CalCtx.slamReference = VRState::IsSlamTrackingSystem(CalCtx.referenceTrackingSystem);
+
 		return CalCtx.referenceID >= 0 && CalCtx.targetID >= 0;
 	}
+
+	bool CollectSample(const CalibrationContext& ctx)
+	{
+		return CollectSampleForChainImpl(
+			const_cast<CalibrationContext&>(ctx),
+			calibration,
+			ctx.referenceID,
+			ctx.targetID,
+			ctx.continuousCalibrationOffset,
+			ctx.slamReference,
+			CalCtx.lockRelativePosition
+		);
+	}
+}
+
+bool CollectSampleForChain(
+	CalibrationContext& ctx,
+	CalibrationCalc& calc,
+	int referenceID,
+	int targetID,
+	const Eigen::Vector3d& targetOffset,
+	bool slamReference,
+	bool lockRelativePosition)
+{
+	return CollectSampleForChainImpl(
+		ctx, calc, referenceID, targetID, targetOffset, slamReference, lockRelativePosition);
+}
+
+void ApplyChainCalibration(const CalibrationChain& chain, bool lerp)
+{
+	ApplyChainCalibrationImpl(chain, lerp);
 }
 
 void InitCalibrator()
@@ -341,22 +511,26 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 			}
 		}
 
-		if (trackingSystem != ctx.targetTrackingSystem)
-		{
+		EnsureDefaultChain();
+		const int chainIdx = FindChainIndexForTargetSystem(trackingSystem);
+		if (chainIdx < 0) {
 			ResetAndDisableOffsets(id);
 			continue;
 		}
 
+		const CalibrationChain& chain = CalChains[chainIdx];
 		protocol::Request req(protocol::RequestSetDeviceTransform);
 		req.setDeviceTransform = {
 			id,
 			true,
-			VRTranslationVec(ctx.calibratedTranslation),
-			VRRotationQuat(ctx.calibratedRotation),
-			ctx.calibratedScale
+			VRTranslationVec(chain.calibratedTranslation),
+			VRRotationQuat(chain.calibratedRotation),
+			chain.calibratedScale
 		};
 		req.setDeviceTransform.lerp = CalCtx.state == CalibrationState::Continuous;
-		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous && id == CalCtx.targetID && CalCtx.quashTargetInContinuous;
+		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous
+			&& id == (uint32_t)chain.targetID
+			&& CalCtx.quashTargetInContinuous;
 
 		Driver.SendBlocking(req);
 	}
@@ -386,10 +560,20 @@ void StartCalibration() {
 }
 
 void StartContinuousCalibration() {
+	Metrics::EnableSessionLogging();
+	CalCtx.timeLastPeriodicLog = 0;
 	CalCtx.hasAppliedCalibrationResult = false;
 	AssignTargets();
+	if (CalCtx.slamReference) {
+		CalCtx.ApplySlamReferencePreset();
+		CalCtx.Log("SLAM reference detected: Quest/inside-out preset applied\n");
+		Metrics::WriteLogAnnotation("SlamReferencePreset");
+	}
 	StartCalibration();
 	CalCtx.state = CalibrationState::Continuous;
+	CalCtx.enableStaticRecalibration = true;
+	calibration.enableStaticRecalibration = true;
+	calibration.ResetContinuousGuards();
 	calibration.setRelativeTransformation(CalCtx.refToTargetPose, CalCtx.relativePosCalibrated);
 	calibration.lockRelativePosition = CalCtx.lockRelativePosition;
 	if (CalCtx.lockRelativePosition) {
@@ -398,10 +582,12 @@ void StartContinuousCalibration() {
 	else {
 		CalCtx.Log("Collecting initial samples...");
 	}
+	StartContinuousChains();
 	Metrics::WriteLogAnnotation("StartContinuousCalibration");
 }
 
 void EndContinuousCalibration() {
+	EndContinuousChains();
 	CalCtx.state = CalibrationState::None;
 	CalCtx.relativePosCalibrated = false;
 	SaveProfile(CalCtx);
@@ -429,20 +615,53 @@ void CalibrationTick(double time)
 
 	ctx.timeLastTick = time;
 	shmem.ReadNewPoses([&](const protocol::DriverPoseShmem::AugmentedPose& augmented_pose) {
-		if (augmented_pose.deviceId >= 0 && augmented_pose.deviceId <= vr::k_unMaxTrackedDeviceCount) {
+		if (augmented_pose.deviceId >= 0 && augmented_pose.deviceId < vr::k_unMaxTrackedDeviceCount) {
 			ctx.devicePoses[augmented_pose.deviceId] = augmented_pose.pose;
+			ctx.devicePoseSampleTime[augmented_pose.deviceId] = augmented_pose.sample_time;
 		}
 	});
 
-	// check for non-updating headset tracking space (caused by quest out of bounds or taken off head for example) and abort everything for this tick
-	auto p = ctx.devicePoses[vr::k_unTrackedDeviceIndex_Hmd].vecPosition;
-	if ((p[0] == 0.0 && p[1] == 0.0 && p[2] == 0.0) || (ctx.xprev == p[0] && ctx.yprev == p[1] && ctx.zprev == p[2])) {
-		// std::cerr << "HMD tracking didn't update, skipping update" << std::endl;
+	const int trackingDeviceId = (ctx.referenceID >= 0) ? ctx.referenceID : vr::k_unTrackedDeviceIndex_Hmd;
+	const auto& trackingPose = ctx.devicePoses[trackingDeviceId];
+	const auto priorQuality = ctx.referenceTracking.quality;
+	ctx.referenceTracking.quality = EvaluateDeviceTracking(
+		trackingPose,
+		ctx.referenceTracking,
+		ctx.slamReference,
+		ctx.maxReferencePoseTimeOffset,
+		3
+	);
+
+	if (ShouldSkipCalibrationTick(ctx.referenceTracking.quality)) {
+		if (ctx.referenceTracking.quality != priorQuality) {
+			if (ctx.referenceTracking.quality == TrackingQuality::Frozen) {
+				ctx.Log("Reference tracking frozen, skipping tick\n");
+			} else if (ctx.referenceTracking.quality == TrackingQuality::Invalid) {
+				ctx.Log("Reference tracking invalid, skipping tick\n");
+			}
+		}
+		if (ctx.state == CalibrationState::Continuous) {
+			calibration.PruneRecentSamples(3);
+		}
 		return;
 	}
-	ctx.xprev = (float) p[0];
-	ctx.yprev = (float) p[1];
-	ctx.zprev = (float) p[2];
+
+	if (ctx.state == CalibrationState::Continuous && ctx.slamReference
+		&& ctx.referenceTracking.quality == TrackingQuality::Degraded) {
+		calibration.PruneRecentSamples(3);
+		return;
+	}
+
+	if (ctx.autoRecalOnGuardianDrift && ctx.state == CalibrationState::Continuous && ctx.slamReference) {
+		if (HandleGuardianDrift(ctx, ctx.guardianDrift, time, calibration)) {
+			for (auto& chain : CalChains) {
+				if (chain.continuousActive) {
+					chain.calibration.Clear();
+					chain.calibration.ResetContinuousGuards();
+				}
+			}
+		}
+	}
 
 	if (ctx.state == CalibrationState::None || ctx.state == CalibrationState::ContinuousStandby
 		|| (ctx.state == CalibrationState::Continuous && !calibration.isValid()))
@@ -511,7 +730,7 @@ void CalibrationTick(double time)
 		ScanAndApplyProfile(ctx);
 
 		Metrics::jitterRef.Push(calibration.ReferenceJitter());
-		Metrics::jitterRef.Push(calibration.TargetJitter());
+		Metrics::jitterTarget.Push(calibration.TargetJitter());
 
 		if (!CalCtx.ReferencePoseIsValidSimple())
 		{
@@ -523,8 +742,8 @@ void CalibrationTick(double time)
 			CalCtx.Log("Target device is not tracking\n"); ok = false;
 		}
 		
-		// @TOOD: Determine if the tracking is jittery
-		if (calibration.ReferenceJitter() > ctx.jitterThreshold) {
+		// SLAM HMD references have ~10cm baseline jitter; only gate on target (lighthouse tracker).
+		if (!ctx.slamReference && calibration.ReferenceJitter() > ctx.jitterThreshold) {
 			CalCtx.Log("Reference device is not tracking\n"); ok = false;
 		}
 		if (calibration.TargetJitter() > ctx.jitterThreshold) {
@@ -551,6 +770,12 @@ void CalibrationTick(double time)
 		return;
 	}
 
+	if (ShouldRejectCalibrationSample(ctx.referenceTracking.quality)) {
+		if (ctx.state == CalibrationState::Continuous) {
+			return;
+		}
+	}
+
 	if (!CollectSample(ctx))
 	{
 		return;
@@ -560,6 +785,18 @@ void CalibrationTick(double time)
 
 	if (calibration.SampleCount() < CalCtx.SampleCount()) return;
 	while (calibration.SampleCount() > CalCtx.SampleCount()) calibration.ShiftSample();
+
+	if (CalCtx.state == CalibrationState::Continuous && CalCtx.pauseOnReferenceJitter && calibration.SampleCount() >= 3) {
+		const double refJitter = calibration.ReferenceJitter();
+		const double targetJitter = calibration.TargetJitter();
+		Metrics::jitterRef.Push(refJitter);
+		Metrics::jitterTarget.Push(targetJitter);
+
+		if (refJitter > CalCtx.jitterThreshold) {
+			CalCtx.Log("Paused continuous cal: high reference jitter\n");
+			return;
+		}
+	}
 
 	if (CalCtx.state == CalibrationState::Continuous && CalCtx.requireTriggerPressToApply && CalCtx.hasAppliedCalibrationResult) {
 		bool triggerPressed = true;
@@ -643,6 +880,42 @@ void CalibrationTick(double time)
 		size_t drop_samples = CalCtx.SampleCount() / 10;
 		for (int i = 0; i < drop_samples; i++) {
 			calibration.ShiftSample();
+		}
+
+		SyncCalCtxToPrimaryChain();
+		for (size_t i = 1; i < CalChains.size(); i++) {
+			if (CalChains[i].continuousActive) {
+				ProcessContinuousChain(CalChains[i], ctx, time);
+			}
+		}
+	}
+
+	if (ctx.state == CalibrationState::Continuous
+		&& ctx.referenceID >= 0 && ctx.targetID >= 0) {
+		if (ctx.timeLastPeriodicLog == 0) {
+			ctx.timeLastPeriodicLog = time;
+		}
+		else if ((time - ctx.timeLastPeriodicLog) >= 1.0) {
+			ctx.timeLastPeriodicLog = time;
+
+			const vr::DriverPose_t& reference = ctx.devicePoses[ctx.referenceID];
+			const vr::DriverPose_t& target = ctx.devicePoses[ctx.targetID];
+			if (reference.poseIsValid && target.poseIsValid) {
+				const bool compensateLatency = ctx.slamReference && ctx.compensatePoseTimeOffset;
+				Pose refPose = ConvertPose(
+					reference,
+					ctx.slamReference && ctx.applyHeadModelToReference,
+					compensateLatency
+				);
+				Pose targetPose = ConvertPose(target, false, false);
+
+				if (ctx.slamReference && ctx.trustTargetYaw && calibration.isRelativeTransformationCalibrated()) {
+					refPose.rot = targetPose.rot * calibration.RelativeTransformation().rotation().inverse();
+				}
+
+				calibration.RecordLiveMetrics(refPose, targetPose);
+				Metrics::WriteLogEntry();
+			}
 		}
 	}
 }

@@ -79,6 +79,10 @@ namespace Metrics {
 
 	bool enableLogs = false;
 
+	void EnableSessionLogging() {
+		enableLogs = true;
+	}
+
 	static std::ofstream logFile;
 	static bool logFileIsOpen = false;
 	static bool failedToOpenLogFile = false;

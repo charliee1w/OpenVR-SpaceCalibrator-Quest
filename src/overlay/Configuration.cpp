@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #include "Configuration.h"
+#include "CalibrationChain.h"
+#include "VRState.h"
 
 #include <picojson.h>
 
@@ -102,6 +104,117 @@ static picojson::object SaveAlignmentParams(CalibrationContext& ctx) {
 	return obj;
 }
 
+static void LoadRelativeTransform(picojson::object& relTransform, Eigen::AffineCompact3d& outPose) {
+	Eigen::Vector3d refToTragetRoation;
+	Eigen::Vector3d refToTargetTranslation;
+
+	refToTragetRoation(0) = relTransform["roll"].get<double>();
+	refToTragetRoation(1) = relTransform["yaw"].get<double>();
+	refToTragetRoation(2) = relTransform["pitch"].get<double>();
+	refToTargetTranslation(0) = relTransform["x"].get<double>();
+	refToTargetTranslation(1) = relTransform["y"].get<double>();
+	refToTargetTranslation(2) = relTransform["z"].get<double>();
+
+	Eigen::Quaterniond rotationQuat =
+		Eigen::AngleAxisd(refToTragetRoation[0], Eigen::Vector3d::UnitX()) *
+		Eigen::AngleAxisd(refToTragetRoation[1], Eigen::Vector3d::UnitY()) *
+		Eigen::AngleAxisd(refToTragetRoation[2], Eigen::Vector3d::UnitZ());
+	Eigen::Matrix3d rotationMatrix = rotationQuat.toRotationMatrix();
+
+	outPose = Eigen::AffineCompact3d::Identity();
+	outPose.linear() = rotationMatrix;
+	outPose.translation() = refToTargetTranslation;
+}
+
+static void ParseChainObject(const picojson::object& obj, CalibrationChain& chain, CalibrationContext& sharedCtx, bool isPrimary) {
+	if (obj.count("chain_name") && obj.at("chain_name").is<std::string>()) {
+		chain.name = obj.at("chain_name").get<std::string>();
+	}
+
+	chain.referenceTrackingSystem = obj.at("reference_tracking_system").get<std::string>();
+	chain.targetTrackingSystem = obj.at("target_tracking_system").get<std::string>();
+	chain.calibratedRotation(0) = obj.at("roll").get<double>();
+	chain.calibratedRotation(1) = obj.at("yaw").get<double>();
+	chain.calibratedRotation(2) = obj.at("pitch").get<double>();
+	chain.calibratedTranslation(0) = obj.at("x").get<double>();
+	chain.calibratedTranslation(1) = obj.at("y").get<double>();
+	chain.calibratedTranslation(2) = obj.at("z").get<double>();
+	picojson::value refDev = obj.at("reference_device");
+	picojson::value tgtDev = obj.at("target_device");
+	LoadStandby(chain.referenceStandby, refDev);
+	LoadStandby(chain.targetStandby, tgtDev);
+
+	chain.autostartContinuous = obj.at("autostart_continuous_calibration").evaluate_as_boolean();
+	chain.continuousCalibrationOffset(0) = obj.at("continuous_calibration_target_offset_x").get<double>();
+	chain.continuousCalibrationOffset(1) = obj.at("continuous_calibration_target_offset_y").get<double>();
+	chain.continuousCalibrationOffset(2) = obj.at("continuous_calibration_target_offset_z").get<double>();
+
+	if (obj.count("scale") && obj.at("scale").is<double>()) {
+		chain.calibratedScale = obj.at("scale").get<double>();
+	} else {
+		chain.calibratedScale = 1.0;
+	}
+
+	if (obj.count("relative_pos_calibrated") && obj.at("relative_pos_calibrated").is<bool>()) {
+		chain.relativePosCalibrated = obj.at("relative_pos_calibrated").get<bool>();
+	}
+	if (obj.count("lock_relative_position") && obj.at("lock_relative_position").is<bool>()) {
+		chain.lockRelativePosition = obj.at("lock_relative_position").get<bool>();
+	}
+	if (obj.count("relative_transform") && obj.at("relative_transform").is<picojson::object>()) {
+		auto relTransform = obj.at("relative_transform").get<picojson::object>();
+		LoadRelativeTransform(relTransform, chain.refToTargetPose);
+	}
+
+	chain.slamReference = VRState::IsSlamTrackingSystem(chain.referenceTrackingSystem);
+	chain.valid = true;
+	chain.calibration.setRelativeTransformation(chain.refToTargetPose, chain.relativePosCalibrated);
+	chain.calibration.lockRelativePosition = chain.lockRelativePosition;
+
+	if (isPrimary) {
+		if (obj.count("alignment_params")) {
+			picojson::value alignmentParams = obj.at("alignment_params");
+			LoadAlignmentParams(sharedCtx, alignmentParams);
+		}
+		if (chain.autostartContinuous) {
+			sharedCtx.state = CalibrationState::ContinuousStandby;
+		}
+		sharedCtx.quashTargetInContinuous = obj.at("quash_target_in_continuous").evaluate_as_boolean();
+		sharedCtx.requireTriggerPressToApply = obj.at("require_trigger_press_to_apply").evaluate_as_boolean();
+		sharedCtx.ignoreOutliers = obj.at("ignore_outliers").evaluate_as_boolean();
+		if (obj.count("static_calibration") && obj.at("static_calibration").is<bool>()) {
+			sharedCtx.enableStaticRecalibration = obj.at("static_calibration").get<bool>();
+		}
+		if (obj.count("jitter_threshold") && obj.at("jitter_threshold").is<double>()) {
+			sharedCtx.jitterThreshold = (float)obj.at("jitter_threshold").get<double>();
+		}
+		if (obj.count("max_relative_error_threshold") && obj.at("max_relative_error_threshold").is<double>()) {
+			sharedCtx.maxRelativeErrorThreshold = (float)obj.at("max_relative_error_threshold").get<double>();
+		}
+		if (obj.count("calibration_speed") && obj.at("calibration_speed").is<double>()) {
+			sharedCtx.calibrationSpeed = (CalibrationContext::Speed)(int)obj.at("calibration_speed").get<double>();
+		}
+		if (obj.count("chaperone") && obj.at("chaperone").is<picojson::object>()) {
+			auto chaperone = obj.at("chaperone").get<picojson::object>();
+			sharedCtx.chaperone.autoApply = chaperone["auto_apply"].get<bool>();
+			LoadFloatArray(chaperone["play_space_size"], sharedCtx.chaperone.playSpaceSize.v, 2);
+			LoadFloatArray(
+				chaperone["standing_center"],
+				(float*)sharedCtx.chaperone.standingCenter.m,
+				sizeof(sharedCtx.chaperone.standingCenter.m) / sizeof(float)
+			);
+			if (chaperone["geometry"].is<picojson::array>()) {
+				auto& geometry = chaperone["geometry"].get<picojson::array>();
+				if (geometry.size() > 0) {
+					sharedCtx.chaperone.geometry.resize(geometry.size() * sizeof(float) / sizeof(sharedCtx.chaperone.geometry[0]));
+					LoadFloatArray(chaperone["geometry"], (float*)sharedCtx.chaperone.geometry.data(), geometry.size());
+					sharedCtx.chaperone.valid = true;
+				}
+			}
+		}
+	}
+}
+
 static void ParseProfile(CalibrationContext &ctx, std::istream &stream)
 {
 	picojson::value v;
@@ -115,107 +228,16 @@ static void ParseProfile(CalibrationContext &ctx, std::istream &stream)
 		throw std::runtime_error("no profiles in file");
 	}
 
-	auto obj = arr[0].get<picojson::object>();
-
-	LoadAlignmentParams(ctx, obj["alignment_params"]);
-	ctx.referenceTrackingSystem = obj["reference_tracking_system"].get<std::string>();
-	ctx.targetTrackingSystem = obj["target_tracking_system"].get<std::string>();
-	ctx.calibratedRotation(0) = obj["roll"].get<double>();
-	ctx.calibratedRotation(1) = obj["yaw"].get<double>();
-	ctx.calibratedRotation(2) = obj["pitch"].get<double>();
-	ctx.calibratedTranslation(0) = obj["x"].get<double>();
-	ctx.calibratedTranslation(1) = obj["y"].get<double>();
-	ctx.calibratedTranslation(2) = obj["z"].get<double>();
-	LoadStandby(ctx.referenceStandby, obj["reference_device"]);
-	LoadStandby(ctx.targetStandby, obj["target_device"]);
-	if (obj["autostart_continuous_calibration"].evaluate_as_boolean()) {
-		ctx.state = CalibrationState::ContinuousStandby;
-	}
-	ctx.quashTargetInContinuous = obj["quash_target_in_continuous"].evaluate_as_boolean();
-	ctx.requireTriggerPressToApply = obj["require_trigger_press_to_apply"].evaluate_as_boolean();
-	ctx.ignoreOutliers = obj["ignore_outliers"].evaluate_as_boolean();
-	ctx.continuousCalibrationOffset(0) = obj["continuous_calibration_target_offset_x"].get<double>();
-	ctx.continuousCalibrationOffset(1) = obj["continuous_calibration_target_offset_y"].get<double>();
-	ctx.continuousCalibrationOffset(2) = obj["continuous_calibration_target_offset_z"].get<double>();
-	if (obj["static_calibration"].is<bool>()) {
-		ctx.enableStaticRecalibration = obj["static_calibration"].get<bool>();
-	}
-	if (obj["jitter_threshold"].is<double>()) {
-		ctx.jitterThreshold = ((float) obj["jitter_threshold"].get<double>());
-	} else {
-		ctx.jitterThreshold = 0.1f;
-	}
-	if (obj["max_relative_error_threshold"].is<double>()) {
-		ctx.maxRelativeErrorThreshold = ((float) obj["max_relative_error_threshold"].get<double>());
-	} else {
-		ctx.maxRelativeErrorThreshold = 0.005f;
+	CalChains.clear();
+	for (size_t i = 0; i < arr.size(); i++) {
+		if (!arr[i].is<picojson::object>()) continue;
+		CalibrationChain chain;
+		ParseChainObject(arr[i].get<picojson::object>(), chain, ctx, i == 0);
+		CalChains.push_back(chain);
 	}
 
-	if (obj["scale"].is<double>()) {
-		ctx.calibratedScale = obj["scale"].get<double>();
-	} else {
-		ctx.calibratedScale = 1.0;
-	}
-
-	if (obj["calibration_speed"].is<double>()) {
-		ctx.calibrationSpeed = (CalibrationContext::Speed)(int) obj["calibration_speed"].get<double>();
-	}
-
-	if (obj["chaperone"].is<picojson::object>()) {
-		auto chaperone = obj["chaperone"].get<picojson::object>();
-		ctx.chaperone.autoApply = chaperone["auto_apply"].get<bool>();
-
-		LoadFloatArray(chaperone["play_space_size"], ctx.chaperone.playSpaceSize.v, 2);
-
-		LoadFloatArray(
-			chaperone["standing_center"],
-			(float *) ctx.chaperone.standingCenter.m,
-			sizeof(ctx.chaperone.standingCenter.m) / sizeof(float)
-		);
-
-		if (!chaperone["geometry"].is<picojson::array>()) {
-			throw std::runtime_error("chaperone geometry is not an array");
-		}
-
-		auto &geometry = chaperone["geometry"].get<picojson::array>();
-
-		if (geometry.size() > 0) {
-			ctx.chaperone.geometry.resize(geometry.size() * sizeof(float) / sizeof(ctx.chaperone.geometry[0]));
-			LoadFloatArray(chaperone["geometry"], (float *) ctx.chaperone.geometry.data(), geometry.size());
-
-			ctx.chaperone.valid = true;
-		}
-	}
-	if (obj["relative_pos_calibrated"].is<bool>()) {
-		ctx.relativePosCalibrated = obj["relative_pos_calibrated"].get<bool>();
-	}
-	if (obj["lock_relative_position"].is<bool>()) {
-		ctx.lockRelativePosition = obj["lock_relative_position"].get<bool>();
-	}
-	if (obj["relative_transform"].is<picojson::object>()) {
-		auto relTransform = obj["relative_transform"].get<picojson::object>();
-		Eigen::Vector3d refToTragetRoation;
-		Eigen::Vector3d refToTargetTranslation;
-
-		refToTragetRoation(0) = relTransform["roll"].get<double>();
-		refToTragetRoation(1) = relTransform["yaw"].get<double>();
-		refToTragetRoation(2) = relTransform["pitch"].get<double>();
-		refToTargetTranslation(0) = relTransform["x"].get<double>();
-		refToTargetTranslation(1) = relTransform["y"].get<double>();
-		refToTargetTranslation(2) = relTransform["z"].get<double>();
-
-		Eigen::Matrix3d rotationMatrix;
-		rotationMatrix =
-			Eigen::AngleAxisd(refToTragetRoation[0], Eigen::Vector3d::UnitX()) *
-			Eigen::AngleAxisd(refToTragetRoation[1], Eigen::Vector3d::UnitY()) *
-			Eigen::AngleAxisd(refToTragetRoation[2], Eigen::Vector3d::UnitZ());
-
-		ctx.refToTargetPose = Eigen::AffineCompact3d::Identity();
-		ctx.refToTargetPose.linear() = rotationMatrix;
-		ctx.refToTargetPose.translation() = refToTargetTranslation;
-	}
-
-	ctx.validProfile = true;
+	SyncPrimaryChainToCalCtx();
+	ctx.validProfile = !CalChains.empty() && CalChains[0].valid;
 }
 
 
@@ -230,83 +252,100 @@ static void WriteStandby(StandbyDevice& device, picojson::value& value) {
 }
 
 
+static void SetJsonNumber(picojson::object& obj, const char* key, double value) {
+	const double stored = value;
+	obj[key].set<double>(stored);
+}
+
+static void SetJsonBool(picojson::object& obj, const char* key, bool value) {
+	const bool stored = value;
+	obj[key].set<bool>(stored);
+}
+
+static picojson::object WriteChainObject(const CalibrationChain& chain, CalibrationContext& ctx, bool isPrimary) {
+	picojson::object profile;
+	if (!chain.name.empty()) {
+		profile["chain_name"].set<std::string>(chain.name);
+	}
+	profile["reference_tracking_system"].set<std::string>(chain.referenceTrackingSystem);
+	profile["target_tracking_system"].set<std::string>(chain.targetTrackingSystem);
+	SetJsonNumber(profile, "roll", chain.calibratedRotation(0));
+	SetJsonNumber(profile, "yaw", chain.calibratedRotation(1));
+	SetJsonNumber(profile, "pitch", chain.calibratedRotation(2));
+	SetJsonNumber(profile, "x", chain.calibratedTranslation(0));
+	SetJsonNumber(profile, "y", chain.calibratedTranslation(1));
+	SetJsonNumber(profile, "z", chain.calibratedTranslation(2));
+	SetJsonNumber(profile, "scale", chain.calibratedScale);
+	WriteStandby(const_cast<StandbyDevice&>(chain.referenceStandby), profile["reference_device"]);
+	WriteStandby(const_cast<StandbyDevice&>(chain.targetStandby), profile["target_device"]);
+	SetJsonBool(profile, "autostart_continuous_calibration", chain.autostartContinuous || chain.continuousActive);
+	SetJsonNumber(profile, "continuous_calibration_target_offset_x", chain.continuousCalibrationOffset(0));
+	SetJsonNumber(profile, "continuous_calibration_target_offset_y", chain.continuousCalibrationOffset(1));
+	SetJsonNumber(profile, "continuous_calibration_target_offset_z", chain.continuousCalibrationOffset(2));
+
+	Eigen::Vector3d refToTragetRoation = chain.refToTargetPose.rotation().eulerAngles(0, 1, 2);
+	Eigen::Vector3d refToTargetTranslation = chain.refToTargetPose.translation();
+	picojson::object refToTarget;
+	SetJsonNumber(refToTarget, "x", refToTargetTranslation(0));
+	SetJsonNumber(refToTarget, "y", refToTargetTranslation(1));
+	SetJsonNumber(refToTarget, "z", refToTargetTranslation(2));
+	SetJsonNumber(refToTarget, "roll", refToTragetRoation(0));
+	SetJsonNumber(refToTarget, "yaw", refToTragetRoation(1));
+	SetJsonNumber(refToTarget, "pitch", refToTragetRoation(2));
+	SetJsonBool(profile, "relative_pos_calibrated", chain.relativePosCalibrated);
+	SetJsonBool(profile, "lock_relative_position", chain.lockRelativePosition);
+	profile["relative_transform"].set<picojson::object>(refToTarget);
+
+	if (isPrimary) {
+		profile["alignment_params"].set<picojson::object>(SaveAlignmentParams(ctx));
+		SetJsonBool(profile, "quash_target_in_continuous", ctx.quashTargetInContinuous);
+		SetJsonBool(profile, "require_trigger_press_to_apply", ctx.requireTriggerPressToApply);
+		SetJsonBool(profile, "ignore_outliers", ctx.ignoreOutliers);
+		SetJsonBool(profile, "static_calibration", ctx.enableStaticRecalibration);
+		SetJsonNumber(profile, "jitter_threshold", (double)ctx.jitterThreshold);
+		SetJsonNumber(profile, "max_relative_error_threshold", (double)ctx.maxRelativeErrorThreshold);
+		SetJsonNumber(profile, "calibration_speed", (double)ctx.calibrationSpeed);
+		if (ctx.chaperone.valid) {
+			picojson::object chaperone;
+			SetJsonBool(chaperone, "auto_apply", ctx.chaperone.autoApply);
+			chaperone["play_space_size"].set<picojson::array>(FloatArray(ctx.chaperone.playSpaceSize.v, 2));
+			chaperone["standing_center"].set<picojson::array>(FloatArray(
+				(float*)ctx.chaperone.standingCenter.m,
+				sizeof(ctx.chaperone.standingCenter.m) / sizeof(float)
+			));
+			chaperone["geometry"].set<picojson::array>(FloatArray(
+				(float*)ctx.chaperone.geometry.data(),
+				sizeof(ctx.chaperone.geometry[0]) / sizeof(float) * ctx.chaperone.geometry.size()
+			));
+			profile["chaperone"].set<picojson::object>(chaperone);
+		}
+	} else {
+		SetJsonBool(profile, "quash_target_in_continuous", false);
+		SetJsonBool(profile, "require_trigger_press_to_apply", false);
+		SetJsonBool(profile, "ignore_outliers", ctx.ignoreOutliers);
+	}
+
+	return profile;
+}
+
 static void WriteProfile(CalibrationContext &ctx, std::ostream &out)
 {
 	if (!ctx.validProfile) {
 		return;
 	}
 
-	picojson::object profile;
-	profile["alignment_params"].set<picojson::object>(SaveAlignmentParams(ctx));
-	
-	profile["reference_tracking_system"].set<std::string>(ctx.referenceTrackingSystem);
-	profile["target_tracking_system"].set<std::string>(ctx.targetTrackingSystem);
-	profile["roll"].set<double>(ctx.calibratedRotation(0));
-	profile["yaw"].set<double>(ctx.calibratedRotation(1));
-	profile["pitch"].set<double>(ctx.calibratedRotation(2));
-	profile["x"].set<double>(ctx.calibratedTranslation(0));
-	profile["y"].set<double>(ctx.calibratedTranslation(1));
-	profile["z"].set<double>(ctx.calibratedTranslation(2));
-	profile["scale"].set<double>(ctx.calibratedScale);
-	WriteStandby(ctx.referenceStandby, profile["reference_device"]);
-	WriteStandby(ctx.targetStandby, profile["target_device"]);
-	bool isInContinuousCalibrationMode = ctx.state == CalibrationState::Continuous || ctx.state == CalibrationState::ContinuousStandby;
-	profile["autostart_continuous_calibration"].set<bool>(isInContinuousCalibrationMode);
-	profile["quash_target_in_continuous"].set<bool>(ctx.quashTargetInContinuous);
-	profile["require_trigger_press_to_apply"].set<bool>(ctx.requireTriggerPressToApply);
-	profile["ignore_outliers"].set<bool>(ctx.ignoreOutliers);
-	profile["continuous_calibration_target_offset_x"].set<double>(ctx.continuousCalibrationOffset(0));
-	profile["continuous_calibration_target_offset_y"].set<double>(ctx.continuousCalibrationOffset(1));
-	profile["continuous_calibration_target_offset_z"].set<double>(ctx.continuousCalibrationOffset(2));
-	profile["static_calibration"].set<bool>(ctx.enableStaticRecalibration);
-	double jitterThreshold = (double)ctx.jitterThreshold;
-	profile["jitter_threshold"].set<double>(jitterThreshold);
-	double maxRelErrorThresTmp = (double)ctx.maxRelativeErrorThreshold;
-	profile["max_relative_error_threshold"].set<double>(maxRelErrorThresTmp);
-
-	double speed = (int) ctx.calibrationSpeed;
-	profile["calibration_speed"].set<double>(speed);
-
-	if (ctx.chaperone.valid) {
-		picojson::object chaperone;
-		chaperone["auto_apply"].set<bool>(ctx.chaperone.autoApply);
-		chaperone["play_space_size"].set<picojson::array>(FloatArray(ctx.chaperone.playSpaceSize.v, 2));
-
-		chaperone["standing_center"].set<picojson::array>(FloatArray(
-			(float *) ctx.chaperone.standingCenter.m,
-			sizeof(ctx.chaperone.standingCenter.m) / sizeof(float)
-		));
-
-		chaperone["geometry"].set<picojson::array>(FloatArray(
-			(float *) ctx.chaperone.geometry.data(),
-			sizeof(ctx.chaperone.geometry[0]) / sizeof(float) * ctx.chaperone.geometry.size()
-		));
-
-		profile["chaperone"].set<picojson::object>(chaperone);
-	}
-
-	Eigen::Vector3d refToTragetRoation = ctx.refToTargetPose.rotation().eulerAngles(0, 1, 2);
-	Eigen::Vector3d refToTargetTranslation = ctx.refToTargetPose.translation();
-	picojson::object refToTarget;
-	refToTarget["x"].set<double>(refToTargetTranslation(0));
-	refToTarget["y"].set<double>(refToTargetTranslation(1));
-	refToTarget["z"].set<double>(refToTargetTranslation(2));
-	refToTarget["roll"].set<double>(refToTragetRoation(0));
-	refToTarget["yaw"].set<double>(refToTragetRoation(1));
-	refToTarget["pitch"].set<double>(refToTragetRoation(2));
-	profile["relative_pos_calibrated"].set<bool>(ctx.relativePosCalibrated);
-	profile["lock_relative_position"].set<bool>(ctx.lockRelativePosition);
-	profile["relative_transform"].set<picojson::object>(refToTarget);
-
-	picojson::value profileV;
-	profileV.set<picojson::object>(profile);
+	SyncCalCtxToPrimaryChain();
+	EnsureDefaultChain();
 
 	picojson::array profiles;
-	profiles.push_back(profileV);
+	for (size_t i = 0; i < CalChains.size(); i++) {
+		picojson::value profileV;
+		profileV.set<picojson::object>(WriteChainObject(CalChains[i], ctx, i == 0));
+		profiles.push_back(profileV);
+	}
 
 	picojson::value profilesV;
 	profilesV.set<picojson::array>(profiles);
-
 	out << profilesV.serialize(true);
 }
 

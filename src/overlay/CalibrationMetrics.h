@@ -54,6 +54,7 @@ namespace Metrics {
 
 	extern bool enableLogs;
 
+	void EnableSessionLogging();
 	void WriteLogAnnotation(const char* s);
 	void WriteLogEntry();
 }

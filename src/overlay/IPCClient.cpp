@@ -33,8 +33,15 @@ void IPCClient::Connect()
 {
 	LPCTSTR pipeName = TEXT(OPENVR_SPACECALIBRATOR_PIPE_NAME);
 
-	WaitNamedPipe(pipeName, 1000);
-	pipe = CreateFile(pipeName, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0);
+	constexpr int kMaxAttempts = 30;
+	for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
+	{
+		WaitNamedPipe(pipeName, 1000);
+		pipe = CreateFile(pipeName, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0);
+		if (pipe != INVALID_HANDLE_VALUE)
+			break;
+		Sleep(500);
+	}
 
 	if (pipe == INVALID_HANDLE_VALUE)
 	{

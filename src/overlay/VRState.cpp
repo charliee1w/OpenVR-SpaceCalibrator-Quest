@@ -90,6 +90,16 @@ VRState VRState::Load()
 	return state;
 }
 
+bool VRState::IsSlamTrackingSystem(const std::string& trackingSystem) {
+	// Inside-out SLAM HMDs: high baseline pose noise, IMU extrapolation, guardian drift.
+	return trackingSystem == "oculus"
+		|| trackingSystem == "holographic"
+		|| trackingSystem == "winmr"
+		|| trackingSystem == "pico"
+		|| trackingSystem == "nreal"
+		|| trackingSystem == "euler";
+}
+
 int VRState::FindDevice(const std::string& trackingSystem, const std::string& model, const std::string& serial) const {
 	// Find the device with the matching tracking system, model and serial
 	for (int i = 0; i < devices.size(); i++) {

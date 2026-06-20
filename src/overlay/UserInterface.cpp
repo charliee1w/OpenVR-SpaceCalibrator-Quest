@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "UserInterface.h"
+#include "CalibrationChain.h"
 #include "Calibration.h"
 #include "Configuration.h"
 #include "VRState.h"
@@ -467,6 +468,18 @@ void CCal_BasicInfo() {
 		}
 
 		ImGui::EndTable();
+	}
+
+	if (CalChains.size() > 1) {
+		ImGui::Text("Multi-platform chains active: %zu", CalChains.size());
+		for (size_t i = 0; i < CalChains.size(); i++) {
+			const auto& chain = CalChains[i];
+			ImGui::TextDisabled("  [%zu] %s -> %s%s",
+				i,
+				chain.referenceTrackingSystem.c_str(),
+				chain.targetTrackingSystem.c_str(),
+				chain.continuousActive ? " (cont)" : "");
+		}
 	}
 
 	ImGui::Checkbox("Hide tracker", &CalCtx.quashTargetInContinuous);

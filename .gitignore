@@ -7,3 +7,10 @@ ipch
 .code
 /install/*.exe
 [bB]in
+
+# Local / personal artifacts — do not publish
+profiles/p4-*.json
+profiles/*-baseline*.json
+profiles/*-winner*.json
+docs/AGENT_HANDOFF.md
+*.log

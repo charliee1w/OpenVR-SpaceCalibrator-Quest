@@ -119,6 +119,58 @@ void CalibrationCalc::Clear() {
 	m_axisVariance = 0.0;
 	m_refToTargetPose = Eigen::AffineCompact3d::Identity();
 	m_relativePosCalibrated = false;
+	ResetContinuousGuards();
+}
+
+void CalibrationCalc::ResetContinuousGuards() {
+	m_hasLastInstantOffset = false;
+	m_lastInstantOffset = Eigen::Vector3d::Zero();
+	m_hasLastRawPosOffset = false;
+	m_lastRawPosOffset = Eigen::Vector3d::Zero();
+	m_frozenOffsetFrames = 0;
+}
+
+void CalibrationCalc::PruneRecentSamples(size_t count) {
+	while (count > 0 && !m_samples.empty()) {
+		m_samples.pop_back();
+		count--;
+	}
+	if (m_samples.empty()) {
+		ResetContinuousGuards();
+	}
+}
+
+Eigen::Vector3d CalibrationCalc::ComputeRigidRefToTargetOffset(const Pose& ref, const Pose& target) const {
+	return ref.rot.inverse() * (target.trans - ref.trans);
+}
+
+bool CalibrationCalc::ShouldRejectContinuousSample(const Eigen::Vector3d& instantOffset, float spikeThresholdM) const {
+	if (!m_hasLastInstantOffset) {
+		return false;
+	}
+
+	return (instantOffset - m_lastInstantOffset).norm() > spikeThresholdM;
+}
+
+void CalibrationCalc::NoteContinuousSampleOffset(const Eigen::Vector3d& instantOffset) {
+	m_lastInstantOffset = instantOffset;
+	m_hasLastInstantOffset = true;
+}
+
+Pose CalibrationCalc::EffectiveReferencePose(const Sample& sample) const {
+	if (!CalCtx.slamReference || !CalCtx.trustTargetYaw || !m_relativePosCalibrated) {
+		return sample.ref;
+	}
+
+	Pose effective = sample.ref;
+	effective.rot = sample.target.rot * m_refToTargetPose.rotation().inverse();
+	return effective;
+}
+
+Sample CalibrationCalc::EffectiveSample(const Sample& sample) const {
+	Sample effective = sample;
+	effective.ref = EffectiveReferencePose(sample);
+	return effective;
 }
 
 std::vector<bool> CalibrationCalc::DetectOutliers() const {
@@ -128,7 +180,7 @@ std::vector<bool> CalibrationCalc::DetectOutliers() const {
 	for (size_t i = 0; i < m_samples.size(); i += step) {
 		for (size_t j = 0; j < i; j += step)
 		{
-			auto delta = DeltaRotationSamples(m_samples[i], m_samples[j]);
+			auto delta = DeltaRotationSamples(EffectiveSample(m_samples[i]), EffectiveSample(m_samples[j]));
 			if (delta.valid) {
 				deltas.push_back(delta);
 			}
@@ -174,7 +226,8 @@ std::vector<bool> CalibrationCalc::DetectOutliers() const {
 	std::vector<bool> valids(m_samples.size());
 	Eigen::Matrix4d I4 = Eigen::Matrix4d::Identity();
 	for (size_t i = 0; i < m_samples.size(); i++) {
-		Eigen::Matrix3d rotExtTmp = (m_samples[i].ref.rot.transpose() * rot * m_samples[i].target.rot);
+		const Pose refPose = EffectiveReferencePose(m_samples[i]);
+		Eigen::Matrix3d rotExtTmp = (refPose.rot.transpose() * rot * m_samples[i].target.rot);
 		Eigen::Quaterniond quatExtTmp(rotExtTmp);
 		quatExtTmp.normalize();
 		coefficients.block<4, 4>(4 * i, 0) = Eigen::Matrix4d::Identity();
@@ -187,7 +240,8 @@ std::vector<bool> CalibrationCalc::DetectOutliers() const {
 	const double threshold = 0.99;
 
 	for (size_t i = 0; i < m_samples.size(); i++) {
-		Eigen::Matrix3d rotExtTmp = (m_samples[i].ref.rot.transpose() * rot * m_samples[i].target.rot);
+		const Pose refPose = EffectiveReferencePose(m_samples[i]);
+		Eigen::Matrix3d rotExtTmp = (refPose.rot.transpose() * rot * m_samples[i].target.rot);
 		Eigen::Quaterniond quatExtTmp(rotExtTmp);
 		double cosHalfAngle = quatExtTmp.w() * quatExt.w() + quatExtTmp.vec().dot(quatExt.vec());
 		if (abs(cosHalfAngle) < threshold) {
@@ -208,7 +262,7 @@ Eigen::Vector3d CalibrationCalc::CalibrateRotation(const bool ignoreOutliers) co
 			if ( ignoreOutliers && (!valids[i] || !valids[j])) {
 				continue;
 			}
-			auto delta = DeltaRotationSamples(m_samples[i], m_samples[j]);
+			auto delta = DeltaRotationSamples(EffectiveSample(m_samples[i]), EffectiveSample(m_samples[j]));
 			if (delta.valid) {
 				deltas.push_back(delta);
 			}
@@ -358,10 +412,12 @@ double CalibrationCalc::RetargetingErrorRMS(
 	for (auto& sample : m_samples) {
 		if (!sample.valid) continue;
 
+		const Pose refPose = EffectiveReferencePose(sample);
+
 		// Apply transformation
 		const auto updatedPose = ApplyTransform(sample.target, calibration);
 
-		const Eigen::Vector3d hmdPoseSpace = sample.ref.rot * hmdToTargetPos + sample.ref.trans;
+		const Eigen::Vector3d hmdPoseSpace = refPose.rot * hmdToTargetPos + refPose.trans;
 
 		// Compute error term
 		double error = (updatedPose.trans - hmdPoseSpace).squaredNorm();
@@ -440,12 +496,14 @@ Eigen::Vector3d CalibrationCalc::ComputeRefToTargetOffset(const Eigen::AffineCom
 	for (auto& sample : m_samples) {
 		if (!sample.valid) continue;
 
+		const Pose refPose = EffectiveReferencePose(sample);
+
 		// Apply transformation
 		const auto updatedPose = ApplyTransform(sample.target, calibration);
 
 		// Now move the transform from world to HMD space
-		const auto hmdOriginPos = updatedPose.trans - sample.ref.trans;
-		const auto hmdSpace = sample.ref.rot.inverse() * hmdOriginPos;
+		const auto hmdOriginPos = updatedPose.trans - refPose.trans;
+		const auto hmdSpace = refPose.rot.inverse() * hmdOriginPos;
 
 		accum += hmdSpace;
 		sampleCount++;
@@ -599,7 +657,8 @@ namespace {
 // S = R^-1 * C * T
 Eigen::AffineCompact3d CalibrationCalc::EstimateRefToTargetPose(const Eigen::AffineCompact3d &calibration) const {
 	auto avg = PoseAverager::AverageFor(m_samples, [&](const auto& sample) {
-		return Eigen::Affine3d(sample.ref.ToAffine().inverse() * calibration * sample.target.ToAffine());
+		const Pose refPose = EffectiveReferencePose(sample);
+		return Eigen::Affine3d(refPose.ToAffine().inverse() * calibration * sample.target.ToAffine());
 	});
 
 #if 0
@@ -628,7 +687,8 @@ Eigen::AffineCompact3d CalibrationCalc::EstimateRefToTargetPose(const Eigen::Aff
 bool CalibrationCalc::CalibrateByRelPose(Eigen::AffineCompact3d &out) const {
 	// R * S * T^-1 = C
 	out = PoseAverager::AverageFor(m_samples, [&](const auto& sample) {
-		return Eigen::AffineCompact3d(sample.ref.ToAffine() * m_refToTargetPose * sample.target.ToAffine().inverse());
+		const Pose refPose = EffectiveReferencePose(sample);
+		return Eigen::AffineCompact3d(refPose.ToAffine() * m_refToTargetPose * sample.target.ToAffine().inverse());
 	});
 
 	return true;
@@ -654,15 +714,48 @@ bool CalibrationCalc::ComputeOneshot(const bool ignoreOutliers) {
 
 void CalibrationCalc::ComputeInstantOffset() {
 	const auto &latestSample = m_samples.back();
+	const Pose refPose = EffectiveReferencePose(latestSample);
 
 	// Apply transformation
 	const auto updatedPose = ApplyTransform(latestSample.target, m_estimatedTransformation);
 
 	// Now move the transform from world to HMD space
-	const auto hmdOriginPos = updatedPose.trans - latestSample.ref.trans;
-	const auto hmdSpace = latestSample.ref.rot.inverse() * hmdOriginPos;
+	const auto hmdOriginPos = updatedPose.trans - refPose.trans;
+	const auto hmdSpace = refPose.rot.inverse() * hmdOriginPos;
 	
 	Metrics::posOffset_lastSample.Push(hmdSpace * 1000);
+}
+
+void CalibrationCalc::RecordLiveMetrics(const Pose& refPose, const Pose& targetPose) {
+	Metrics::RecordTimestamp();
+
+	const Eigen::AffineCompact3d liveCalibration =
+		Eigen::AffineCompact3d(refPose.ToAffine() * m_refToTargetPose * targetPose.ToAffine().inverse());
+
+	double relPoseError = INFINITY;
+	Eigen::Vector3d relPosOffset;
+	if (ValidateCalibration(liveCalibration, &relPoseError, &relPosOffset)) {
+		Metrics::posOffset_byRelPose.Push(relPosOffset * 1000);
+		Metrics::error_byRelPose.Push(relPoseError * 1000);
+	}
+
+	if (m_isValid) {
+		double activeError = INFINITY;
+		Eigen::Vector3d activeOffset;
+		if (ValidateCalibration(m_estimatedTransformation, &activeError, &activeOffset)) {
+			Metrics::posOffset_currentCal.Push(activeOffset * 1000);
+			Metrics::error_currentCal.Push(activeError * 1000);
+		}
+	}
+
+	if (!m_samples.empty()) {
+		ComputeInstantOffset();
+	}
+
+	if (m_samples.size() >= 3) {
+		Metrics::jitterRef.Push(ReferenceJitter());
+		Metrics::jitterTarget.Push(TargetJitter());
+	}
 }
 
 bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double relPoseMaxError, const bool ignoreOutliers) {
@@ -678,10 +771,27 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 			Metrics::posOffset_byRelPose.Push(relPosOffset * 1000);
 			Metrics::error_byRelPose.Push(relPoseError * 1000);
 
-			m_isValid = true;
-			m_estimatedTransformation = byRelPose;
-			return true;
+			double priorError = INFINITY;
+			Eigen::Vector3d priorPosOffset;
+			if (m_isValid && ValidateCalibration(m_estimatedTransformation, &priorError, &priorPosOffset)) {
+				Metrics::posOffset_currentCal.Push(priorPosOffset * 1000);
+				Metrics::error_currentCal.Push(priorError * 1000);
+			}
+
+			const bool firstCal = !m_isValid;
+			constexpr double kMinImprovementM = 0.002;
+			const bool meaningfulImprovement = !m_isValid || (priorError > relPoseError + kMinImprovementM);
+			const bool withinBand = relPoseError <= std::max(relPoseMaxError, 0.012);
+			const bool beatsPrior = !m_isValid || (relPoseError * threshold < priorError);
+
+			if (firstCal || (meaningfulImprovement && withinBand && beatsPrior)) {
+				m_isValid = true;
+				m_estimatedTransformation = byRelPose;
+				Metrics::calibrationApplied.Push(false);
+				return true;
+			}
 		}
+		return false;
 	}
 
 	double priorCalibrationError = INFINITY;
@@ -704,7 +814,8 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 			Metrics::posOffset_byRelPose.Push(relPosOffset * 1000);
 			Metrics::error_byRelPose.Push(relPoseError * 1000);
 
-			if (relPoseError < 0.010 || m_relativePosCalibrated && relPoseError < 0.025) {
+			const double relPoseAcceptThreshold = m_relativePosCalibrated ? 0.05 : 0.015;
+			if (relPoseError < relPoseAcceptThreshold) {
 				if (relPoseError * threshold >= priorCalibrationError) {
 					return false;
 				}
@@ -735,6 +846,19 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 		} else {
 			newCalibrationValid = ValidateCalibration(calibration, &newError, &m_posOffset);
 			Metrics::posOffset_rawComputed.Push(m_posOffset * 1000);
+
+			if (m_hasLastRawPosOffset && (m_posOffset - m_lastRawPosOffset).norm() < 1e-4) {
+				m_frozenOffsetFrames++;
+			} else {
+				m_frozenOffsetFrames = 0;
+				m_lastRawPosOffset = m_posOffset;
+				m_hasLastRawPosOffset = true;
+			}
+
+			if (m_frozenOffsetFrames >= CalCtx.continuousFrozenFrameThreshold && priorCalibrationError > 0.03) {
+				newCalibrationValid = false;
+				shouldRapidCorrect = false;
+			}
 		}
 
 		if (m_isValid) {
