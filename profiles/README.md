@@ -10,7 +10,13 @@ The overlay **Save profile** button writes here automatically. Files in this fol
 
 | File | Purpose |
 |------|---------|
-| [example-quest-lighthouse.json](example-quest-lighthouse.json) | Starter template for Quest → lighthouse head tracker |
+| [example-quest-lighthouse.json](example-quest-lighthouse.json) | **P4 winner** template — Quest → lighthouse head tracker |
+
+**Apply P4 winner to your saved calibration (keeps devices + room transform):**
+
+```powershell
+.\scripts\apply-p4-winner.ps1
+```
 
 **Do not commit personal profiles** (serials, chaperone geometry, calibration offsets from your room).
 

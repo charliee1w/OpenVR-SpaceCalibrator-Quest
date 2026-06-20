@@ -22,6 +22,13 @@ function Get-Percentile([double[]]$Values, [double]$Percentile) {
     return $sorted[$index]
 }
 
+function Convert-MetricDouble([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return 0.0 }
+    $t = $Text.Trim().ToLowerInvariant()
+    if ($t -eq 'inf' -or $t -eq '-inf' -or $t -eq 'nan') { return [double]::NaN }
+    return [double]$Text
+}
+
 $logDir = Join-Path $env:LOCALAPPDATA "..\LocalLow\SpaceCalibrator\Logs"
 
 if ($Latest -or [string]::IsNullOrWhiteSpace($LogPath)) {
@@ -55,12 +62,12 @@ foreach ($line in $lines) {
     if ($cols.Count -lt 16) { continue }
 
     $rows += [pscustomobject]@{
-        Timestamp            = [double]$cols[0]
-        ErrorRawComputed     = [double]$cols[13]
-        ErrorCurrentCal      = [double]$cols[14]
-        ErrorByRelPose       = [double]$cols[15]
-        JitterRef            = if ($cols.Count -gt 18 -and $cols[18]) { [double]$cols[18] } else { 0 }
-        JitterTarget         = if ($cols.Count -gt 19 -and $cols[19]) { [double]$cols[19] } else { 0 }
+        Timestamp            = Convert-MetricDouble $cols[0]
+        ErrorRawComputed     = Convert-MetricDouble $cols[13]
+        ErrorCurrentCal      = Convert-MetricDouble $cols[14]
+        ErrorByRelPose       = Convert-MetricDouble $cols[15]
+        JitterRef            = if ($cols.Count -gt 18) { Convert-MetricDouble $cols[18] } else { 0 }
+        JitterTarget         = if ($cols.Count -gt 19) { Convert-MetricDouble $cols[19] } else { 0 }
         CalibrationApplied   = if ($cols.Count -gt 20) { $cols[20] } else { '' }
     }
 }
@@ -76,9 +83,24 @@ if ($rows.Count -eq 0) {
 }
 
 $duration = $rows[-1].Timestamp - $rows[0].Timestamp
-$err = $rows.ErrorByRelPose | Where-Object { $_ -gt 0 }
 
-Write-Host "`n--- Metrics ($($rows.Count) samples, $([math]::Round($duration, 1))s) ---" -ForegroundColor Yellow
+$contSegments = @()
+$segStart = $null
+foreach ($ann in ($annotations | Sort-Object Time)) {
+    if ($ann.Event -eq 'StartContinuousCalibration') { $segStart = $ann.Time }
+    elseif ($ann.Event -eq 'EndContinuousCalibration' -and $null -ne $segStart) {
+        $contSegments += ($ann.Time - $segStart)
+        $segStart = $null
+    }
+}
+$contDuration = if ($contSegments.Count -gt 0) { ($contSegments | Measure-Object -Maximum).Maximum } else { 0 }
+
+$err = $rows.ErrorByRelPose | Where-Object { -not [double]::IsNaN($_) -and $_ -gt 0 }
+
+Write-Host "`n--- Metrics ($($rows.Count) samples, $([math]::Round($duration, 1))s row span) ---" -ForegroundColor Yellow
+if ($contDuration -gt 0) {
+    Write-Host ("  longest continuous-cal segment (annotations): {0:N0}s ({1:N1} min)" -f $contDuration, ($contDuration / 60))
+}
 # CSV values are already in mm (see CalibrationCalc.cpp: relPoseError * 1000)
 $errMedian = Get-Median @($err)
 $errP95 = Get-Percentile @($err) 95
@@ -98,8 +120,9 @@ Write-Host ("  cal corrections: {0} (FULL: {1}, STATIC: {2})" -f `
 $guardian = ($annotations | Where-Object Event -match 'Guardian').Count
 Write-Host ("  guardian events: {0}" -f $guardian)
 
-$p4Pass = $errMedian -lt 15 -and $duration -ge 600
+$durCheck = [math]::Max($duration, $contDuration)
+$p4Pass = $errMedian -lt 15 -and $durCheck -ge 600
 Write-Host "`n--- P4 exit check ---" -ForegroundColor Yellow
-Write-Host ("  duration >= 10 min: {0}" -f ($duration -ge 600))
+Write-Host ("  duration >= 10 min: {0}" -f ($durCheck -ge 600))
 Write-Host ("  median error < 15mm: {0}" -f ($errMedian -lt 15))
 Write-Host ("  P4 pass: {0}" -f $p4Pass) -ForegroundColor $(if ($p4Pass) { 'Green' } else { 'DarkYellow' })

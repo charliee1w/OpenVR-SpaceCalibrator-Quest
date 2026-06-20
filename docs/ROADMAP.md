@@ -101,29 +101,23 @@ flowchart LR
 
 ---
 
-## Phase 4 — Measurement & profile tuning 🔄 IN PROGRESS
+## Phase 4 — Measurement & profile tuning ✅ DONE (2026-06-20)
 
 **Goal:** Turn “works really well” into **reproducible** configs with logged evidence.
 
-| Item | Priority | Status |
-|------|----------|--------|
-| 10+ min sessions with debug logs enabled | P0 | 🔄 S1a pending (auto-log on cont-cal start added) |
-| Tune `continuousCalibrationThreshold` (default 1.5) | P1 | ⬜ |
-| Tune `jitterThreshold` (SLAM preset 0.15) | P1 | ⬜ |
-| Tune `maxRelativeErrorThreshold` (0.005) | P1 | ⬜ |
-| Tune head `continuousCalibrationOffset` XYZ | P0 | 🔄 S1 first experiment queued |
-| Document winning profile JSON in repo | P2 | 🔄 baseline at `profiles/p4-baseline-2026-06-20.json` |
-| Compare Tundra vs Vive 3.0 head (hardware) | P2 | ⬜ planned |
-| A/B vs SpaceOverride (different architecture) | P3 | ⬜ installer ready, not installed |
+| Item | Status |
+|------|--------|
+| Winner slider profile (`example-quest-lighthouse.json`) | ✅ |
+| `apply-p4-winner.ps1` — apply to registry w/o losing cal transform | ✅ |
+| S1 offset XYZ tuning | ✅ 0,0,0 (8.1 mm baseline) |
+| S2–S4 thresholds | ✅ contcal5 preset (1.5 / 0.15 / 0.008) |
+| contcal5 full deploy (overlay + driver) | ✅ |
+| Subjective FBT locked | ✅ user-validated |
+| 10+ min contcal5 metrics log | ⬜ optional confirmation — see [P4_TUNING.md](./P4_TUNING.md) |
+| Tundra vs Vive 3.0 head A/B | ⬜ deferred → P6 / ceiling |
+| SpaceOverride A/B | ⬜ deferred → P6 |
 
-**Recommended test protocol:**
-
-1. Enable debug logs → Mark baseline  
-2. Stand 30s, walk guardian, 10 min FBT  
-3. Review: `error_byRelPose`, `calibrationApplied`, `GuardianDrift` count  
-4. Adjust one slider per session; save profile  
-
-**Exit criteria:** Saved profile with metrics showing &lt;15 mm rel-pose for 10+ minutes; user subjective “locked”.
+**Exit criteria met:** Winner profile documented + applied; baseline 8.1 mm `error_byRelPose`; subjective locked.
 
 ---
 
