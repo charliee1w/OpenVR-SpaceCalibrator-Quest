@@ -22,9 +22,9 @@ $driverText = Get-Content $driverCpp -Raw
 
 Add-Check "centralized pose refresh module" $true $calPoses
 
-Add-Check "validProfile blocks VRSystem target fallback" `
-    ($calPosesText -match 'if \(!ctx\.validProfile\)') `
-    "CalibrationPoses.cpp must gate VRSystem target fallback on !validProfile"
+Add-Check "active transform blocks VRSystem target fallback" `
+    ($calPosesText -match 'if \(!ctx\.validProfile \|\| !ctx\.relativePosCalibrated\)') `
+    "CalibrationPoses.cpp must gate VRSystem target fallback until profile+relative pose are ready"
 
 Add-Check "reference always VRSystem" `
     ($calPosesText -match 'VRSystemReference') `

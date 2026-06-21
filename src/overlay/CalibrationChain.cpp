@@ -147,7 +147,7 @@ void StartContinuousChains() {
 	chain.calibration.setRelativeTransformation(chain.refToTargetPose, chain.relativePosCalibrated);
 	chain.calibration.lockRelativePosition = chain.lockRelativePosition;
 	chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
-	if (chain.valid) {
+	if (chain.valid && chain.relativePosCalibrated) {
 		chain.calibration.SeedFromProfile(chain.calibratedRotation, chain.calibratedTranslation);
 	}
 

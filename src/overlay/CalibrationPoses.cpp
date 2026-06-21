@@ -108,8 +108,8 @@ void RefreshDevicePosesForCalibration(CalibrationContext& ctx, protocol::DriverP
 	if (CalPoseIsTrackingOk(ctx.devicePoses[targetId])) {
 		// fall through to sample-time sync below
 	}
-	else if (!ctx.validProfile) {
-		// First cal only: no active transform, VRSystem pose matches raw tracking.
+	else if (!ctx.validProfile || !ctx.relativePosCalibrated) {
+		// No active transform (or still bootstrapping ref-to-target): VRSystem matches raw tracking.
 		TrackedPoseToDriverPose(trackedPoses[targetId], ctx.devicePoses[targetId]);
 		QueryPerformanceCounter(&ctx.devicePoseSampleTime[targetId]);
 		SetPoseSource(targetId, CalPoseSource::VRSystemTargetFallback);

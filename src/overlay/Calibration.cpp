@@ -636,8 +636,12 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 }
 
 namespace {
+	bool CanApplyCalibrationTransform(const CalibrationContext& ctx) {
+		return !ctx.lockRelativePosition || ctx.relativePosCalibrated;
+	}
+
 	bool ShouldApplySavedProfile(const CalibrationContext& ctx) {
-		return ctx.validProfile && (
+		return ctx.validProfile && CanApplyCalibrationTransform(ctx) && (
 			ctx.state == CalibrationState::None
 			|| ctx.state == CalibrationState::Continuous
 			|| ctx.state == CalibrationState::ContinuousStandby
@@ -695,17 +699,20 @@ void StartContinuousCalibration() {
 	calibration.ResetContinuousGuards();
 	calibration.setRelativeTransformation(CalCtx.refToTargetPose, CalCtx.relativePosCalibrated);
 	calibration.lockRelativePosition = CalCtx.lockRelativePosition;
-	if (CalCtx.validProfile) {
+	if (CalCtx.validProfile && CalCtx.relativePosCalibrated) {
 		calibration.SeedFromProfile(CalCtx.calibratedRotation, CalCtx.calibratedTranslation);
 	}
-	if (CalCtx.lockRelativePosition) {
+	if (CalCtx.lockRelativePosition && !CalCtx.relativePosCalibrated) {
+		CalCtx.Log("Bootstrapping relative pose — move head/body, then hold still\n");
+	}
+	else if (CalCtx.lockRelativePosition) {
 		CalCtx.Log("Relative position locked");
 	}
 	else {
 		CalCtx.Log("Collecting initial samples...");
 	}
 	StartContinuousChains();
-	if (CalCtx.validProfile) {
+	if (CalCtx.validProfile && CalCtx.relativePosCalibrated) {
 		// Match upstream: apply hide-tracker (quash) immediately when cont cal starts,
 		// not only after the first incremental cal update.
 		ScanAndApplyProfile(CalCtx);
@@ -978,11 +985,13 @@ void CalibrationTick(double time)
 			ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0;
 			ctx.refToTargetPose = calibration.RelativeTransformation();
 			ctx.relativePosCalibrated = calibration.isRelativeTransformationCalibrated();
-			ctx.validProfile = true;
-			SyncCalCtxToPrimaryChain();
-			ApplyChainCalibration(CalChains[0], lerp);
-			MaybeSaveProfile(ctx, time);
-			CalCtx.hasAppliedCalibrationResult = true;
+			if (CanApplyCalibrationTransform(ctx)) {
+				ctx.validProfile = true;
+				SyncCalCtxToPrimaryChain();
+				ApplyChainCalibration(CalChains[0], lerp);
+				MaybeSaveProfile(ctx, time);
+				CalCtx.hasAppliedCalibrationResult = true;
+			}
 		}
 	}
 	else if (calibration.isValid()) {
