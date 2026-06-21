@@ -92,6 +92,7 @@ static int fboTextureWidth = 0, fboTextureHeight = 0;
 
 static char cwd[MAX_PATH];
 const float MINIMIZED_MAX_FPS = 60.0f;
+static constexpr double DASHBOARD_MAX_FPS = 30.0;
 
 enum DWMA_USE_IMMSERSIVE_DARK_MODE_ENUM {
 	DWMA_USE_IMMERSIVE_DARK_MODE = 20,
@@ -504,7 +505,7 @@ void RunLoop() {
 			vr::VROverlay()->SetOverlayMouseScale(overlayMainHandle, &mouseScale);
 		}
 
-		const double dashboardInterval = 1.0 / 90.0;
+		const double dashboardInterval = 1.0 / DASHBOARD_MAX_FPS;
 		double waitEventsTimeout = std::max(CalCtx.wantedUpdateInterval, dashboardInterval);
 
 		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
