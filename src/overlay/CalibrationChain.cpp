@@ -11,22 +11,41 @@ std::vector<CalibrationChain> CalChains;
 void InitGoreSetup(CalibrationContext& ctx) {
 	EnsureDefaultChain();
 	auto& chain = CalChains[0];
-	chain.referenceTrackingSystem = "oculus";
-	chain.targetTrackingSystem = "lighthouse";
-	chain.lockRelativePosition = true;
-	chain.slamReference = true;
-	chain.name = "Quest SLAM -> Lighthouse FBT";
 
-	ctx.referenceTrackingSystem = chain.referenceTrackingSystem;
-	ctx.targetTrackingSystem = chain.targetTrackingSystem;
-	ctx.lockRelativePosition = chain.lockRelativePosition;
-	ctx.slamReference = true;
-	ctx.quashTargetInContinuous = true;
+	const bool hadSavedCal = ctx.validProfile;
+	const Eigen::Vector3d savedRot = ctx.calibratedRotation;
+	const Eigen::Vector3d savedTrans = ctx.calibratedTranslation;
+	const double savedScale = ctx.calibratedScale;
+	const Eigen::AffineCompact3d savedRefToTarget = ctx.refToTargetPose;
+	const bool savedRelPos = ctx.relativePosCalibrated;
+	const StandbyDevice savedRefStandby = ctx.referenceStandby;
+	const StandbyDevice savedTgtStandby = ctx.targetStandby;
 
-	if (!ctx.validProfile) {
-		chain.autostartContinuous = true;
-		ctx.ApplySlamReferencePreset();
+	ctx.ApplyQuestProDefaults();
+
+	if (hadSavedCal) {
+		ctx.calibratedRotation = savedRot;
+		ctx.calibratedTranslation = savedTrans;
+		ctx.calibratedScale = savedScale;
+		ctx.refToTargetPose = savedRefToTarget;
+		ctx.relativePosCalibrated = savedRelPos;
+		ctx.validProfile = true;
+		if (!savedRefStandby.serial.empty() || !savedRefStandby.model.empty()) {
+			ctx.referenceStandby = savedRefStandby;
+		}
+		if (!savedTgtStandby.serial.empty() || !savedTgtStandby.model.empty()) {
+			ctx.targetStandby = savedTgtStandby;
+		}
 	}
+
+	chain.referenceTrackingSystem = ctx.referenceTrackingSystem;
+	chain.targetTrackingSystem = ctx.targetTrackingSystem;
+	chain.referenceStandby = ctx.referenceStandby;
+	chain.targetStandby = ctx.targetStandby;
+	chain.lockRelativePosition = ctx.lockRelativePosition;
+	chain.slamReference = ctx.slamReference;
+	chain.name = "Quest Pro -> Lighthouse FBT";
+	chain.autostartContinuous = true;
 
 	SyncCalCtxToPrimaryChain();
 }

@@ -124,6 +124,34 @@ int VRState::ResolveStandbyDevice(
 	return FindDevice(trackingSystem, standby.model, standby.serial);
 }
 
+static bool ModelsMatchQuestPro(const std::string& deviceModel, const std::string& wantedModel) {
+	if (deviceModel == wantedModel) {
+		return true;
+	}
+	if (wantedModel.find("Quest Pro") != std::string::npos
+		&& deviceModel.find("Quest Pro") != std::string::npos) {
+		return true;
+	}
+	return false;
+}
+
+int VRState::FindQuestProHmd() const {
+	int fallbackOculusHmd = -1;
+	for (const auto& device : devices) {
+		if (device.deviceClass != vr::TrackedDeviceClass_HMD
+			|| device.trackingSystem != "oculus") {
+			continue;
+		}
+		if (device.model.find("Quest Pro") != std::string::npos) {
+			return device.id;
+		}
+		if (fallbackOculusHmd < 0) {
+			fallbackOculusHmd = device.id;
+		}
+	}
+	return fallbackOculusHmd;
+}
+
 int VRState::FindDevice(const std::string& trackingSystem, const std::string& model, const std::string& serial) const {
 	// Find the device with the matching tracking system, model and serial
 	for (int i = 0; i < devices.size(); i++) {
@@ -131,10 +159,16 @@ int VRState::FindDevice(const std::string& trackingSystem, const std::string& mo
 		
 		uint8_t matches = 0;
 
-		if (device.model == model) {
-			matches++;
+		if (!model.empty()) {
+			if (device.deviceClass == vr::TrackedDeviceClass_HMD
+				&& device.trackingSystem == trackingSystem
+				&& ModelsMatchQuestPro(device.model, model)) {
+				matches++;
+			} else if (device.model == model) {
+				matches++;
+			}
 		}
-		if (device.serial == serial) {
+		if (!serial.empty() && device.serial == serial) {
 			matches++;
 		}
 

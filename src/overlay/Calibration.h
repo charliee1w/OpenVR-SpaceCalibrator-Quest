@@ -151,7 +151,10 @@ struct CalibrationContext
 		return threshold;
 	}
 
-	// Tuned for Quest/VD/SLAM reference + lighthouse head tracker (see audit logs).
+	// Quest Pro + VD + lighthouse FBT — default tuning for this fork.
+	void ApplyQuestProDefaults();
+
+	// SLAM reference subset (called by ApplyQuestProDefaults).
 	void ApplySlamReferencePreset() {
 		enableStaticRecalibration = true;
 		pauseOnReferenceJitter = false;

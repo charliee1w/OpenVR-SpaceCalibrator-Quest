@@ -357,8 +357,11 @@ namespace {
 	bool AssignTargets() {
 		auto state = VRState::Load();
 
-		const int resolvedReference = state.ResolveStandbyDevice(
+		int resolvedReference = state.ResolveStandbyDevice(
 			CalCtx.referenceStandby, CalCtx.referenceTrackingSystem);
+		if (resolvedReference < 0 && CalCtx.referenceTrackingSystem == "oculus") {
+			resolvedReference = state.FindQuestProHmd();
+		}
 		if (resolvedReference >= 0
 			&& (CalCtx.referenceID < 0 || !VRState::IsDeviceConnected(CalCtx.referenceID))) {
 			CalCtx.referenceID = resolvedReference;
@@ -418,6 +421,36 @@ bool CollectSampleForChain(
 void ApplyChainCalibration(const CalibrationChain& chain, bool lerp)
 {
 	ApplyChainCalibrationImpl(chain, lerp);
+}
+
+void CalibrationContext::ApplyQuestProDefaults() {
+	ApplySlamReferencePreset();
+
+	alignmentSpeedParams.align_speed_tiny = 1.0f;
+	alignmentSpeedParams.align_speed_small = 1.0f;
+	alignmentSpeedParams.align_speed_large = 2.0f;
+
+	continuousCalibrationThreshold = 1.5f;
+	ignoreOutliers = false;
+	requireTriggerPressToApply = false;
+	quashTargetInContinuous = true;
+	lockRelativePosition = true;
+	enableStaticRecalibration = true;
+	autoRecalOnGuardianDrift = true;
+
+	referenceTrackingSystem = "oculus";
+	targetTrackingSystem = "lighthouse";
+	slamReference = true;
+
+	if (referenceStandby.trackingSystem.empty()) {
+		referenceStandby.trackingSystem = "oculus";
+	}
+	if (referenceStandby.model.empty()) {
+		referenceStandby.model = "Meta Quest Pro";
+	}
+	if (targetStandby.trackingSystem.empty()) {
+		targetStandby.trackingSystem = "lighthouse";
+	}
 }
 
 void InitCalibrator()
@@ -595,7 +628,7 @@ void StartContinuousCalibration() {
 	AssignTargets();
 	if (CalCtx.slamReference) {
 		CalCtx.ApplySlamReferencePreset();
-		CalCtx.Log("SLAM reference detected: Quest/inside-out preset applied\n");
+		CalCtx.Log("Quest Pro continuous cal started\n");
 		Metrics::WriteLogAnnotation("SlamReferencePreset");
 	}
 	StartCalibration();

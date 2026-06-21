@@ -277,9 +277,9 @@ void CCal_DrawSettings() {
 	}
 
 	if (CalCtx.slamReference) {
-		ImGui::BeginGroupPanel("Quest / SLAM tuning", panel_size);
+		ImGui::BeginGroupPanel("Quest Pro tuning", panel_size);
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-		ImGui::TextWrapped("Tuning for wireless Quest / inside-out reference + lighthouse trackers.");
+		ImGui::TextWrapped("Defaults tuned for Meta Quest Pro (VD) + lighthouse FBT.");
 		ImGui::PopStyleColor();
 
 		LabeledSliderFloat("Spike reject (m)", &CalCtx.continuousSpikeThresholdM, 0.01f, 0.15f, "%.3f",
