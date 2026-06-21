@@ -65,7 +65,6 @@ static void VisitAlignmentParams(CalibrationContext& ctx, std::function<void(con
 	P(align_speed_tiny);
 	P(align_speed_small);
 	P(align_speed_large);
-	P(align_rot_speed_scale);
 	P(thr_trans_tiny);
 	P(thr_trans_small);
 	P(thr_trans_large);
@@ -192,24 +191,6 @@ static void ParseChainObject(const picojson::object& obj, CalibrationChain& chai
 		if (obj.count("max_relative_error_threshold") && obj.at("max_relative_error_threshold").is<double>()) {
 			sharedCtx.maxRelativeErrorThreshold = (float)obj.at("max_relative_error_threshold").get<double>();
 		}
-		if (obj.count("continuous_spike_threshold_m") && obj.at("continuous_spike_threshold_m").is<double>()) {
-			sharedCtx.continuousSpikeThresholdM = (float)obj.at("continuous_spike_threshold_m").get<double>();
-		}
-		if (obj.count("guardian_drift_trans_threshold_m") && obj.at("guardian_drift_trans_threshold_m").is<double>()) {
-			sharedCtx.guardianDriftTransThresholdM = (float)obj.at("guardian_drift_trans_threshold_m").get<double>();
-		}
-		if (obj.count("guardian_drift_yaw_threshold_deg") && obj.at("guardian_drift_yaw_threshold_deg").is<double>()) {
-			sharedCtx.guardianDriftYawThresholdRad = (float)(obj.at("guardian_drift_yaw_threshold_deg").get<double>() * EIGEN_PI / 180.0);
-		}
-		if (obj.count("guardian_drift_confirm_checks") && obj.at("guardian_drift_confirm_checks").is<double>()) {
-			sharedCtx.guardianDriftConfirmChecks = (int)obj.at("guardian_drift_confirm_checks").get<double>();
-		}
-		if (obj.count("guardian_drift_cooldown_frames") && obj.at("guardian_drift_cooldown_frames").is<double>()) {
-			sharedCtx.guardianDriftCooldownFrames = (int)obj.at("guardian_drift_cooldown_frames").get<double>();
-		}
-		if (obj.count("auto_recal_on_guardian_drift") && obj.at("auto_recal_on_guardian_drift").is<bool>()) {
-			sharedCtx.autoRecalOnGuardianDrift = obj.at("auto_recal_on_guardian_drift").get<bool>();
-		}
 		if (obj.count("calibration_speed") && obj.at("calibration_speed").is<double>()) {
 			sharedCtx.calibrationSpeed = (CalibrationContext::Speed)(int)obj.at("calibration_speed").get<double>();
 		}
@@ -248,14 +229,14 @@ static void ParseProfile(CalibrationContext &ctx, std::istream &stream)
 	}
 
 	CalChains.clear();
-	if (arr.size() >= 1 && arr[0].is<picojson::object>()) {
+	for (size_t i = 0; i < arr.size(); i++) {
+		if (!arr[i].is<picojson::object>()) continue;
 		CalibrationChain chain;
-		ParseChainObject(arr[0].get<picojson::object>(), chain, ctx, true);
+		ParseChainObject(arr[i].get<picojson::object>(), chain, ctx, i == 0);
 		CalChains.push_back(chain);
 	}
 
 	SyncPrimaryChainToCalCtx();
-	InitGoreSetup(ctx);
 	ctx.validProfile = !CalChains.empty() && CalChains[0].valid;
 }
 
@@ -323,12 +304,6 @@ static picojson::object WriteChainObject(const CalibrationChain& chain, Calibrat
 		SetJsonBool(profile, "static_calibration", ctx.enableStaticRecalibration);
 		SetJsonNumber(profile, "jitter_threshold", (double)ctx.jitterThreshold);
 		SetJsonNumber(profile, "max_relative_error_threshold", (double)ctx.maxRelativeErrorThreshold);
-		SetJsonNumber(profile, "continuous_spike_threshold_m", (double)ctx.continuousSpikeThresholdM);
-		SetJsonNumber(profile, "guardian_drift_trans_threshold_m", (double)ctx.guardianDriftTransThresholdM);
-		SetJsonNumber(profile, "guardian_drift_yaw_threshold_deg", (double)(ctx.guardianDriftYawThresholdRad * 180.0 / EIGEN_PI));
-		SetJsonNumber(profile, "guardian_drift_confirm_checks", (double)ctx.guardianDriftConfirmChecks);
-		SetJsonNumber(profile, "guardian_drift_cooldown_frames", (double)ctx.guardianDriftCooldownFrames);
-		SetJsonBool(profile, "auto_recal_on_guardian_drift", ctx.autoRecalOnGuardianDrift);
 		SetJsonNumber(profile, "calibration_speed", (double)ctx.calibrationSpeed);
 		if (ctx.chaperone.valid) {
 			picojson::object chaperone;
@@ -363,9 +338,11 @@ static void WriteProfile(CalibrationContext &ctx, std::ostream &out)
 	EnsureDefaultChain();
 
 	picojson::array profiles;
-	picojson::value profileV;
-	profileV.set<picojson::object>(WriteChainObject(CalChains[0], ctx, true));
-	profiles.push_back(profileV);
+	for (size_t i = 0; i < CalChains.size(); i++) {
+		picojson::value profileV;
+		profileV.set<picojson::object>(WriteChainObject(CalChains[i], ctx, i == 0));
+		profiles.push_back(profileV);
+	}
 
 	picojson::value profilesV;
 	profilesV.set<picojson::array>(profiles);
@@ -435,7 +412,6 @@ void LoadProfile(CalibrationContext &ctx)
 	if (str == "") {
 		std::cout << "Profile is empty" << std::endl;
 		ctx.Clear();
-		InitGoreSetup(ctx);
 		return;
 	}
 
@@ -455,14 +431,4 @@ void SaveProfile(CalibrationContext &ctx)
 	std::stringstream io;
 	WriteProfile(ctx, io);
 	WriteRegistryKey(io.str());
-}
-
-void MaybeSaveProfile(CalibrationContext &ctx, double time, bool force)
-{
-	constexpr double kMinSaveIntervalSec = 5.0;
-	if (!force && ctx.timeLastProfileSave > 0 && (time - ctx.timeLastProfileSave) < kMinSaveIntervalSec) {
-		return;
-	}
-	SaveProfile(ctx);
-	ctx.timeLastProfileSave = time;
 }

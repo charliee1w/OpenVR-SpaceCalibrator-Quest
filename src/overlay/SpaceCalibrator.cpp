@@ -1,10 +1,8 @@
 ﻿#include "stdafx.h"
 #include "Calibration.h"
-#include "CalibrationChain.h"
 #include "Configuration.h"
 #include "EmbeddedFiles.h"
 #include "UserInterface.h"
-#include "ui_theme.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -129,9 +127,9 @@ void CreateGLFWWindow()
 	glfwSwapInterval(1);
 	gl3wInit();
 
-	// Keep a normal desktop window as fallback when the SteamVR dashboard is stuck or unavailable.
+	// Minimise the window
+	glfwIconifyWindow(glfwWindow);
 	HWND windowHwmd = glfwGetWin32Window(glfwWindow);
-	ShowWindow(windowHwmd, SW_SHOW);
 	EnableDarkModeTopBar(windowHwmd);
 
 	// Load icon and set it in the window
@@ -163,7 +161,6 @@ void CreateGLFWWindow()
 	ImGui_ImplOpenGL3_Init("#version 330");
 
 	ImGui::StyleColorsDark();
-	SpaceCalUI::ApplyTheme();
 
 	glGenTextures(1, &fboTextureHandle);
 	glBindTexture(GL_TEXTURE_2D, fboTextureHandle);
@@ -348,7 +345,7 @@ void RunLoop() {
 		bool dashboardVisible = false;
 		int width, height;
 		glfwGetFramebufferSize(glfwWindow, &width, &height);
-		const bool windowVisible = width > 0 && height > 0;
+		const bool windowVisible = (width > 0 && height > 0);
 
 		if (overlayMainHandle && vr::VROverlay())
 		{
@@ -357,6 +354,9 @@ void RunLoop() {
 
 			static bool keyboardOpen = false, keyboardJustClosed = false;
 
+			// After closing the keyboard, this code waits one frame for ImGui to pick up the new text from SetActiveText
+			// before clearing the active widget. Then it waits another frame before allowing the keyboard to open again,
+			// otherwise it will do so instantly since WantTextInput is still true on the second frame.
 			if (keyboardJustClosed && keyboardOpen)
 			{
 				ImGui::ClearActiveID();
@@ -368,6 +368,7 @@ void RunLoop() {
 			}
 			else if (!io.WantTextInput)
 			{
+				// User might close the keyboard without hitting Done, so we unset the flag to allow it to open again.
 				keyboardOpen = false;
 			}
 			else if (io.WantTextInput && !keyboardOpen && !keyboardJustClosed)
@@ -380,7 +381,7 @@ void RunLoop() {
 					int len = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, textBuf, sizeof(textBuf), nullptr, nullptr);
 					textBuf[std::min(static_cast<size_t>(len), sizeof(textBuf) - 1)] = 0;
 
-					uint32_t unFlags = 0;
+					uint32_t unFlags = 0; // EKeyboardFlags 
 
 					vr::VROverlay()->ShowKeyboardForOverlay(
 						overlayMainHandle, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
@@ -420,7 +421,7 @@ void RunLoop() {
 					MultiByteToWideChar(CP_UTF8, 0, textBuf, -1, (LPWSTR)textInfo->TextA.Data, bufSize);
 					textInfo->CurLenA = bufSize;
 					textInfo->CurLenA = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, nullptr, 0, nullptr, nullptr);
-
+					
 					keyboardJustClosed = true;
 					break;
 				}
@@ -429,11 +430,12 @@ void RunLoop() {
 				}
 			}
 		}
-
+		
 		if (windowVisible || dashboardVisible)
 		{
 			auto &io = ImGui::GetIO();
-
+			
+			// These change state now, so we must execute these before doing our own modifications to the io state for VR
 			ImGui_ImplOpenGL3_NewFrame();
 			ImGui_ImplGlfw_NewFrame();
 
@@ -449,6 +451,7 @@ void RunLoop() {
 
 			BuildMainWindow(dashboardVisible);
 
+			// @TODO: Move to a separate function, for now it works
 			static bool githubPopupDismissed = false;
 
 			if (s_isGitHubVersionInstalled && !githubPopupDismissed) {
@@ -497,7 +500,7 @@ void RunLoop() {
 				vr::Texture_t vrTex = {
 					.handle = (void*)
 #if defined _WIN64 || defined _LP64
-					(uint64_t)
+				(uint64_t)
 #endif
 						fboTextureHandle,
 					.eType = vr::TextureType_OpenGL,
@@ -511,7 +514,7 @@ void RunLoop() {
 			}
 		}
 
-		const double dashboardInterval = 1.0 / 90.0;
+		const double dashboardInterval = 1.0 / 90.0; // fps
 		double waitEventsTimeout = std::max(CalCtx.wantedUpdateInterval, dashboardInterval);
 
 		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
@@ -524,6 +527,7 @@ void RunLoop() {
 
 		glfwWaitEventsTimeout(waitEventsTimeout);
 
+		// If we're minimized rendering won't limit our frame rate so we need to do it ourselves.
 		if (glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED))
 		{
 			double targetFrameTime = 1 / MINIMIZED_MAX_FPS;
@@ -532,7 +536,7 @@ void RunLoop() {
 			{
 				std::this_thread::sleep_for(std::chrono::duration<double>(waitTime));
 			}
-
+		
 			lastFrameStartTime += targetFrameTime;
 		}
 	}

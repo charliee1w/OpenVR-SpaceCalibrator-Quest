@@ -36,13 +36,12 @@ struct CalibrationChain {
 
 extern std::vector<CalibrationChain> CalChains;
 
-// Quest (oculus) reference + lighthouse FBT — single fixed setup.
-void InitGoreSetup(CalibrationContext& ctx);
-
 void EnsureDefaultChain();
 void SyncCalCtxToPrimaryChain();
 void SyncPrimaryChainToCalCtx();
 int FindChainIndexForTargetSystem(const std::string& trackingSystem);
 bool AssignChainTargets(CalibrationChain& chain);
+bool CollectChainSample(CalibrationChain& chain, const CalibrationContext& ctx);
+void ProcessContinuousChain(CalibrationChain& chain, CalibrationContext& ctx, double time);
 void StartContinuousChains();
 void EndContinuousChains();

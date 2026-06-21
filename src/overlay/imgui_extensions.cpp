@@ -1,6 +1,5 @@
 #include "imgui_extensions.h"
 
-#include "ui_theme.h"
 #include "imgui_internal.h"
 
 static ImVector<ImRect> s_GroupPanelLabelStack;
@@ -29,9 +28,7 @@ void ImGui::BeginGroupPanel(const char* name, const ImVec2& size)
     ImGui::BeginGroup();
     ImGui::Dummy(ImVec2(frameHeight * 0.5f, 0.0f));
     ImGui::SameLine(0.0f, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, SpaceCalUI::Accent());
     ImGui::TextUnformatted(name);
-    ImGui::PopStyleColor();
     auto labelMin = ImGui::GetItemRectMin();
     auto labelMax = ImGui::GetItemRectMax();
     ImGui::SameLine(0.0f, 0.0f);
@@ -105,20 +102,10 @@ void ImGui::EndGroupPanel()
         case 3: ImGui::PushClipRect(ImVec2(labelRect.Min.x, labelRect.Max.y), ImVec2(labelRect.Max.x, FLT_MAX), true); break;
         }
 
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(
-            frameRect.Min, frameRect.Max,
-            SpaceCalUI::ColorToU32(ImVec4(0.09f, 0.11f, 0.14f, 0.55f)),
-            halfFrame.x);
-        drawList->AddRect(
+        ImGui::GetWindowDrawList()->AddRect(
             frameRect.Min, frameRect.Max,
             ImColor(ImGui::GetStyleColorVec4(ImGuiCol_Border)),
             halfFrame.x);
-        drawList->AddRectFilled(
-            ImVec2(frameRect.Min.x, frameRect.Min.y),
-            ImVec2(frameRect.Min.x + 3.0f, frameRect.Max.y),
-            SpaceCalUI::ColorToU32(SpaceCalUI::AccentMuted(), 0.85f),
-            2.0f);
 
         ImGui::PopClipRect();
     }
@@ -137,85 +124,4 @@ void ImGui::EndGroupPanel()
     ImGui::Dummy(ImVec2(0.0f, 0.0f));
 
     ImGui::EndGroup();
-}
-
-void ImGui::StatusBadge(const char* text, ImU32 bgColor) {
-    const ImVec2 padding(8.0f, 3.0f);
-    ImVec2 textSize = ImGui::CalcTextSize(text);
-    ImVec2 size(textSize.x + padding.x * 2.0f, textSize.y + padding.y * 2.0f);
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    drawList->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bgColor, 4.0f);
-    drawList->AddText(ImVec2(pos.x + padding.x, pos.y + padding.y), IM_COL32(255, 255, 255, 255), text);
-    ImGui::Dummy(size);
-}
-
-void ImGui::MetricCard(const char* id, const char* label, const char* value, const char* unit, ImVec4 accent) {
-    ImGui::PushID(id);
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    float cardWidth = (avail.x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImVec2 size(cardWidth, ImGui::GetFrameHeight() * 3.2f);
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-
-    drawList->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
-        SpaceCalUI::ColorToU32(ImVec4(0.10f, 0.13f, 0.16f, 1.0f)), 5.0f);
-    drawList->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
-        SpaceCalUI::ColorToU32(ImVec4(0.20f, 0.26f, 0.32f, 0.65f)), 5.0f);
-    drawList->AddRectFilled(pos, ImVec2(pos.x + 4.0f, pos.y + size.y),
-        SpaceCalUI::ColorToU32(accent, 0.9f), 2.0f);
-
-    ImGui::SetNextItemAllowOverlap();
-    ImGui::Dummy(size);
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + 12.0f, pos.y + 8.0f));
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextUnformatted(label);
-    ImGui::PopStyleColor();
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + 12.0f, pos.y + size.y - ImGui::GetTextLineHeight() - 10.0f));
-    ImGui::PushStyleColor(ImGuiCol_Text, accent);
-    ImGui::Text("%s", value);
-    ImGui::PopStyleColor();
-    if (unit && unit[0]) {
-        ImGui::SameLine(0.0f, 6.0f);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextUnformatted(unit);
-        ImGui::PopStyleColor();
-    }
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + size.x + ImGui::GetStyle().ItemSpacing.x, pos.y));
-    ImGui::PopID();
-}
-
-bool ImGui::LabeledSliderFloat(const char* label, float* v, float min, float max, const char* fmt, const char* tooltip, ImGuiSliderFlags flags) {
-    ImGui::AlignTextToFramePadding();
-    const float avail = ImGui::GetContentRegionAvail().x;
-    const float labelWidth = ImClamp(avail * 0.42f, 120.0f, 280.0f);
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine(labelWidth);
-    ImGui::PushItemWidth(avail - labelWidth - ImGui::GetStyle().ItemInnerSpacing.x);
-    ImGui::PushID(label);
-    bool changed = ImGui::SliderFloat("##slider", v, min, max, fmt, flags);
-    ImGui::PopItemWidth();
-    if (tooltip && ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", tooltip);
-    }
-    ImGui::PopID();
-    return changed;
-}
-
-void ImGui::SectionHeading(const char* title, const char* subtitle) {
-    ImGui::PushStyleColor(ImGuiCol_Text, SpaceCalUI::Accent());
-    ImGui::TextUnformatted(title);
-    ImGui::PopStyleColor();
-    if (subtitle && subtitle[0]) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", subtitle);
-        ImGui::PopStyleColor();
-    }
-    ImGui::Spacing();
-}
-
-void ImGui::HintText(const char* text) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", text);
-    ImGui::PopStyleColor();
 }

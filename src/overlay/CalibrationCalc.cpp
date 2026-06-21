@@ -112,19 +112,6 @@ void CalibrationCalc::PushSample(const Sample& sample) {
 	m_samples.push_back(sample);
 }
 
-void CalibrationCalc::SeedFromProfile(const Eigen::Vector3d& eulerDeg, const Eigen::Vector3d& translationCm) {
-	const auto euler = eulerDeg * EIGEN_PI / 180.0;
-	const Eigen::Quaterniond rotQuat =
-		Eigen::AngleAxisd(euler(0), Eigen::Vector3d::UnitZ()) *
-		Eigen::AngleAxisd(euler(1), Eigen::Vector3d::UnitY()) *
-		Eigen::AngleAxisd(euler(2), Eigen::Vector3d::UnitX());
-
-	m_estimatedTransformation = Eigen::AffineCompact3d::Identity();
-	m_estimatedTransformation.rotate(rotQuat);
-	m_estimatedTransformation.translation() = translationCm * 0.01;
-	m_isValid = true;
-}
-
 void CalibrationCalc::Clear() {
 	m_estimatedTransformation.setIdentity();
 	m_isValid = false;
@@ -778,11 +765,7 @@ void CalibrationCalc::RecordLiveMetrics(const Pose& refPose, const Pose& targetP
 bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double relPoseMaxError, const bool ignoreOutliers) {
 	Metrics::RecordTimestamp();
 
-	// Locked relative pose requires a learned HMD-to-tracker offset; identity refToTarget
-	// produces wrong transforms and blocks raw target poses once a profile is active.
-	const bool bootstrappingRelPose = lockRelativePosition && !m_relativePosCalibrated;
-
-	if (lockRelativePosition && m_relativePosCalibrated) {
+	if (lockRelativePosition) {
 		Eigen::AffineCompact3d byRelPose;
 		double relPoseError = INFINITY;
 		Eigen::Vector3d relPosOffset;
@@ -811,7 +794,6 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 			if (notCatastrophic && (firstCal || (meaningfulImprovement && withinBand && beatsPrior))) {
 				m_isValid = true;
 				m_estimatedTransformation = byRelPose;
-				m_refToTargetPose = EstimateRefToTargetPose(m_estimatedTransformation);
 				Metrics::calibrationApplied.Push(false);
 				return true;
 			}
@@ -833,7 +815,7 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 	bool usingRelPose = false;
 	double relPoseError = INFINITY;
 
-	if (enableStaticRecalibration && !bootstrappingRelPose && CalibrateByRelPose(byRelPose)) {
+	if (enableStaticRecalibration && CalibrateByRelPose(byRelPose)) {
 		Eigen::Vector3d relPosOffset;
 		if (ValidateCalibration(byRelPose, &relPoseError, &relPosOffset)) {
 			Metrics::posOffset_byRelPose.Push(relPosOffset * 1000);
@@ -911,7 +893,7 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 		
 	
 	// Now, can we use the relative pose to perform a rapid correction?
-	if (!newCalibrationValid && shouldRapidCorrect && !bootstrappingRelPose) {
+	if (!newCalibrationValid && shouldRapidCorrect) {
 		
 		double existingPoseErrorUsingRelPosition = RetargetingErrorRMS(m_refToTargetPose.translation(), m_estimatedTransformation);
 		Metrics::error_currentCalRelPose.Push(existingPoseErrorUsingRelPosition * 1000);
@@ -931,6 +913,7 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 
 	if (newCalibrationValid) {
 		lerp = m_isValid;
+		m_relativePosCalibrated = m_relativePosCalibrated || newError < 0.005;
 		if (!m_isValid) {
 			CalCtx.Log("Applying initial transformation...");
 		}
@@ -946,15 +929,6 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 
 		if (!usingRelPose) {
 			m_refToTargetPose = EstimateRefToTargetPose(m_estimatedTransformation);
-		}
-
-		if (bootstrappingRelPose) {
-			m_relativePosCalibrated = newError < 0.05;
-			if (m_relativePosCalibrated) {
-				CalCtx.Log("Relative pose learned; locked continuous cal active\n");
-			}
-		} else {
-			m_relativePosCalibrated = m_relativePosCalibrated || newError < 0.005;
 		}
 
 		Metrics::calibrationApplied.Push(!usingRelPose);

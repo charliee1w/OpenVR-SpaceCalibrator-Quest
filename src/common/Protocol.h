@@ -136,9 +136,6 @@ namespace protocol
 		 * (We actually do a lerp(s * delta_t) where s is the speed factor here)
 		 */
 		double align_speed_tiny, align_speed_small, align_speed_large;
-
-		/** Multiplier on rotation lerp vs translation (1 = same speed; <1 = slower yaw). */
-		double align_rot_speed_scale = 1.0;
 	};
 
 	struct SetDeviceTransform
@@ -201,7 +198,6 @@ namespace protocol
 
 	class DriverPoseShmem {
 	public:
-		// pose is always the raw pre-transform tracking sample from the driver hook.
 		struct AugmentedPose {
 			LARGE_INTEGER sample_time;
 			int deviceId;
@@ -343,19 +339,10 @@ namespace protocol
 			});
 
 			if (index >= 0 && index < vr::k_unMaxTrackedDeviceCount) {
-				const AugmentedPose& cached = lastPose[index];
-				if (cached.sample_time.QuadPart == 0
-					|| !cached.pose.poseIsValid
-					|| cached.pose.result != vr::ETrackingResult::TrackingResult_Running_OK) {
-					return false;
-				}
-				pose = cached.pose;
-				if (pSampleTime) {
-					*pSampleTime = cached.sample_time;
-				}
+				pose = lastPose[index].pose;
+				if (pSampleTime) *pSampleTime = lastPose[index].sample_time;
 				return true;
 			}
-			return false;
 		}
 
 		void SetPose(int index, const vr::DriverPose_t& pose) {

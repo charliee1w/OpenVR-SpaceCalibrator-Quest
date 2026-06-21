@@ -1,4 +1,4 @@
-# Static checks for calibration pose-source invariants. Run before deploy / in CI.
+# contcal5 pose-contract invariants. Fails if post-contcal45 regressions creep back in.
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 
@@ -8,47 +8,39 @@ function Add-Check([string]$Name, [bool]$Pass, [string]$Detail) {
     $checks.Add([pscustomobject]@{ Name = $Name; Pass = $Pass; Detail = $Detail })
 }
 
-$calPoses = Join-Path $repoRoot "src\overlay\CalibrationPoses.cpp"
 $calCpp = Join-Path $repoRoot "src\overlay\Calibration.cpp"
 $driverCpp = Join-Path $repoRoot "src\driver\ServerTrackedDeviceProvider.cpp"
+$calPoses = Join-Path $repoRoot "src\overlay\CalibrationPoses.cpp"
 
-if (-not (Test-Path $calPoses)) {
-    Write-Error "Missing $calPoses"
-}
-
-$calPosesText = Get-Content $calPoses -Raw
 $calCppText = Get-Content $calCpp -Raw
 $driverText = Get-Content $driverCpp -Raw
 
-Add-Check "centralized pose refresh module" $true $calPoses
+Add-Check "no CalibrationPoses split module" (-not (Test-Path $calPoses)) `
+    "Pose sourcing must stay in Calibration.cpp (unified shmem), not CalibrationPoses.cpp"
 
-Add-Check "active transform blocks VRSystem target fallback" `
-    ($calPosesText -match 'if \(!ctx\.validProfile \|\| !ctx\.relativePosCalibrated\)') `
-    "CalibrationPoses.cpp must gate VRSystem target fallback until profile+relative pose are ready"
+Add-Check "no RefreshDevicePosesForCalibration" `
+    (-not ($calCppText -match 'RefreshDevicePosesForCalibration')) `
+    "Later pose-source split must not return"
 
-Add-Check "SLAM reference prefers driver shmem" `
-    ($calPosesText -match 'ctx\.slamReference' -and $calPosesText -match 'VRSystemReference') `
-    "Quest reference must use hook shmem when available, VRSystem as fallback"
+Add-Check "shmem read in CalibrationTick" `
+    ($calCppText -match 'shmem\.ReadNewPoses') `
+    "CalibrationTick must read driver shmem directly"
 
-Add-Check "cal tick uses RefreshDevicePosesForCalibration" `
-    ($calCppText -match 'RefreshDevicePosesForCalibration') `
-    "CalibrationTick must call RefreshDevicePosesForCalibration only"
+Add-Check "no VRSystem pose fallback in cal tick" `
+    (-not ($calCppText -match 'GetDeviceToAbsoluteTrackingPose')) `
+    "Ref/target must not mix VRSystem with hook shmem"
 
-Add-Check "saved profile scan on device change" `
-    ($calCppText -match 'MaybeScanAndApplySavedProfile') `
-    "continuous cal must re-apply profile when trackers connect"
+Add-Check "no passive pose throttle in driver" `
+    (-not ($driverText -match 'ShouldStreamPassivePose|kPassivePoseStreamIntervalSec')) `
+    "Driver must stream all hook poses every frame"
 
-Add-Check "no duplicate shmem read in Calibration.cpp" `
-    (-not ($calCppText -match 'shmem\.ReadNewPoses')) `
-    "pose shmem read must live only in CalibrationPoses.cpp"
-
-Add-Check "shmem on every pose update" `
-    ($driverText -match 'shmem\.SetPose\(openVRID, pose\)' -and -not ($driverText -match 'ShouldStreamPoseForCal')) `
-    "driver must stream raw pre-transform poses every frame (no cal-rate throttle)"
-
-Add-Check "shmem written before transform" `
+Add-Check "shmem before transform in driver" `
     ($driverText -match 'shmem\.SetPose' -and $driverText -match 'tf\.enabled') `
-    "driver must SetPose before applying enabled transform"
+    "Raw pre-transform poses must be written to shmem first"
+
+Add-Check "relative pose reset on end continuous" `
+    ($calCppText -match 'EndContinuousCalibration[\s\S]*relativePosCalibrated = false') `
+    "EndContinuousCalibration must clear relativePosCalibrated"
 
 $failed = @($checks | Where-Object { -not $_.Pass })
 foreach ($c in $checks) {
@@ -60,4 +52,4 @@ if ($failed.Count -gt 0) {
     Write-Error "$($failed.Count) calibration invariant check(s) failed."
 }
 
-Write-Host "All calibration invariant checks passed."
+Write-Host "All contcal5 pose-contract checks passed."

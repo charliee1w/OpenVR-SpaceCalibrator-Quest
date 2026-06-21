@@ -25,7 +25,6 @@ struct IsoTransform {
 	 * lerp between (this * localPoint) and (target * localPoint), despite rotation occurring around it.
 	 */
 	IsoTransform interpolateAround(double lerp, const IsoTransform& target, const Eigen::Vector3d& localPoint) const;
-	IsoTransform interpolateAround(double transLerp, double rotLerp, const IsoTransform& target, const Eigen::Vector3d& localPoint) const;
 };
 
 inline IsoTransform operator*(const IsoTransform& a, const IsoTransform& b) {
@@ -41,14 +40,10 @@ inline Eigen::Vector3d operator*(const IsoTransform& a, const Eigen::Vector3d& p
 }
 
 inline IsoTransform IsoTransform::interpolateAround(double lerp, const IsoTransform& target, const Eigen::Vector3d& localPoint) const {
-	return interpolateAround(lerp, lerp, target, localPoint);
-}
-
-inline IsoTransform IsoTransform::interpolateAround(double transLerp, double rotLerp, const IsoTransform& target, const Eigen::Vector3d& localPoint) const {
 	auto initialPos = (*this) * localPoint;
-	Eigen::Vector3d finalPos = initialPos * (1 - transLerp) + (target * localPoint) * transLerp;
+	Eigen::Vector3d finalPos = initialPos * (1 - lerp) + (target * localPoint) * lerp;
 
-	auto newRotation = rotation.slerp(rotLerp, target.rotation);
+	auto newRotation = rotation.slerp(lerp, target.rotation);
 	Eigen::Vector3d newTranslation = finalPos - Eigen::Isometry3d(newRotation) * localPoint;
 
 	return IsoTransform(newRotation, newTranslation);

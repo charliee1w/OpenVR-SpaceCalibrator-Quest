@@ -50,9 +50,8 @@ struct CalibrationContext
 	bool enabled = false;
 	bool validProfile = false;
 	bool clearOnLog = false;
-	bool warnedTargetPoseMissingFromShmem = false;
 	bool quashTargetInContinuous = false;
-	double timeLastTick = 0, timeLastScan = 0, timeLastAssign = 0, timeLastPeriodicLog = 0, timeLastProfileSave = 0;
+	double timeLastTick = 0, timeLastScan = 0, timeLastAssign = 0, timeLastPeriodicLog = 0;
 	bool ignoreOutliers = false;
 	double wantedUpdateInterval = 1.0;
 	float jitterThreshold = 3.0f;
@@ -66,7 +65,6 @@ struct CalibrationContext
 	Eigen::Vector3d continuousCalibrationOffset;
 
 	static constexpr size_t ContinuousSampleCount = 40;
-	static constexpr size_t BootstrapSampleCount = 12;
 	float continuousSpikeThresholdM = 0.06f;
 	int continuousFrozenFrameThreshold = 6;
 	bool pauseOnReferenceJitter = true;
@@ -122,7 +120,6 @@ struct CalibrationContext
 		alignmentSpeedParams.align_speed_tiny = 1.0f;
 		alignmentSpeedParams.align_speed_small = 1.0f;
 		alignmentSpeedParams.align_speed_large = 2.0f;
-		alignmentSpeedParams.align_rot_speed_scale = 1.0;
 
 		continuousCalibrationThreshold = 1.5f;
 		maxRelativeErrorThreshold = 0.005f;
@@ -153,10 +150,7 @@ struct CalibrationContext
 		return threshold;
 	}
 
-	// Quest Pro + VD + lighthouse FBT — default tuning for this fork.
-	void ApplyQuestProDefaults();
-
-	// SLAM reference subset (called by ApplyQuestProDefaults).
+	// Tuned for Quest/VD/SLAM reference + lighthouse head tracker (see audit logs).
 	void ApplySlamReferencePreset() {
 		enableStaticRecalibration = true;
 		pauseOnReferenceJitter = false;
@@ -174,9 +168,7 @@ struct CalibrationContext
 		guardianDriftYawThresholdRad = 5.0f * static_cast<float>(EIGEN_PI / 180.0);
 		guardianDriftConfirmChecks = 3;
 		guardianDriftCooldownFrames = 60;
-		autoRecalOnGuardianDrift = false;
 		calibrationSpeed = SLOW;
-		alignmentSpeedParams.align_rot_speed_scale = 0.45;
 	}
 
 	struct Chaperone
@@ -214,19 +206,12 @@ struct CalibrationContext
 		enabled = false;
 		validProfile = false;
 		refToTargetPose = Eigen::AffineCompact3d::Identity();
-		relativePosCalibrated = false;
-	}
-
-	inline bool CanApplyCalibrationTransform() const {
-		return !lockRelativePosition || relativePosCalibrated;
+		relativePosCalibrated = true;
 	}
 
 	size_t SampleCount()
 	{
 		if (state == CalibrationState::Continuous || state == CalibrationState::ContinuousStandby) {
-			if (lockRelativePosition && !relativePosCalibrated) {
-				return BootstrapSampleCount;
-			}
 			return ContinuousSampleCount;
 		}
 
@@ -312,7 +297,6 @@ struct CalibrationChain;
 void ApplyChainCalibration(const CalibrationChain& chain, bool lerp);
 
 void InitCalibrator();
-void ScanAndApplyProfile(CalibrationContext& ctx);
 void CalibrationTick(double time);
 void StartCalibration();
 void StartContinuousCalibration();

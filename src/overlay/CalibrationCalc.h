@@ -92,8 +92,6 @@ public:
 		m_relativePosCalibrated = calibrated;
 	}
 
-	void SeedFromProfile(const Eigen::Vector3d& eulerDeg, const Eigen::Vector3d& translationCm);
-
 	void PushSample(const Sample& sample);
 	void Clear();
 	void ResetContinuousGuards();
@@ -114,10 +112,6 @@ public:
 
 	size_t SampleCount() const {
 		return m_samples.size();
-	}
-
-	const std::deque<Sample>& Samples() const {
-		return m_samples;
 	}
 
 	void ShiftSample() {

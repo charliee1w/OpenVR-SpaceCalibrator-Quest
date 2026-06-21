@@ -6,8 +6,6 @@
 #include "CalibrationCalc.h"
 #include "CalibrationChain.h"
 #include "GuardianDrift.h"
-#include "CalibrationPoses.h"
-
 #include "VRState.h"
 
 #include <string>
@@ -32,16 +30,6 @@ static protocol::DriverPoseShmem shmem;
 
 namespace {
 	CalibrationCalc calibration;
-
-	bool SafeDriverSend(const protocol::Request& req) {
-		try {
-			Driver.SendBlocking(req);
-			return true;
-		} catch (const std::exception& e) {
-			CalCtx.Log(std::string("Driver IPC failed: ") + e.what() + "\n");
-			return false;
-		}
-	}
 
 	inline vr::HmdVector3d_t quaternionRotateVector(const vr::HmdQuaternion_t& quat, const double(&vector)[3]) {
 		vr::HmdQuaternion_t vectorQuat = { 0.0, vector[0], vector[1] , vector[2] };
@@ -224,30 +212,18 @@ namespace {
 		return Pose(xform);
 	}
 
-	bool PosePassesQualityGate(
-		CalibrationContext& ctx,
-		const vr::DriverPose_t& pose,
-		const char* label,
-		bool rejectYawDrift)
-	{
-		const bool logRejections = ctx.state != CalibrationState::Continuous
-			&& ctx.state != CalibrationState::ContinuousStandby;
-
+	bool PosePassesQualityGate(const vr::DriverPose_t& pose, const char* label, bool rejectYawDrift) {
 		if (!pose.poseIsValid || pose.result != vr::ETrackingResult::TrackingResult_Running_OK) {
-			if (logRejections) {
-				char buf[128];
-				snprintf(buf, sizeof buf, "%s pose rejected: invalid tracking (valid=%d result=%d)\n",
-					label, pose.poseIsValid, pose.result);
-				ctx.Log(buf);
-			}
+			char buf[128];
+			snprintf(buf, sizeof buf, "%s pose rejected: invalid tracking (valid=%d result=%d)\n",
+				label, pose.poseIsValid, pose.result);
+			CalCtx.Log(buf);
 			return false;
 		}
 		if (rejectYawDrift && pose.willDriftInYaw) {
-			if (logRejections) {
-				char buf[128];
-				snprintf(buf, sizeof buf, "%s pose rejected: SLAM yaw drift warning\n", label);
-				ctx.Log(buf);
-			}
+			char buf[128];
+			snprintf(buf, sizeof buf, "%s pose rejected: SLAM yaw drift warning\n", label);
+			CalCtx.Log(buf);
 			return false;
 		}
 		return true;
@@ -272,8 +248,8 @@ namespace {
 	vr::DriverPose_t target = ctx.devicePoses[targetID];
 
 	const bool rejectRefYawDrift = slamReference && ctx.rejectYawDriftPoses;
-	bool ok = PosePassesQualityGate(ctx, reference, "Reference", rejectRefYawDrift)
-		&& PosePassesQualityGate(ctx, target, "Target", false);
+	bool ok = PosePassesQualityGate(reference, "Reference", rejectRefYawDrift)
+		&& PosePassesQualityGate(target, "Target", false);
 	if (!ok) {
 		if (ctx.state == CalibrationState::Continuous) {
 			calc.PruneRecentSamples(4);
@@ -299,18 +275,15 @@ namespace {
 			return false;
 		}
 
-		const bool vrSystemRef = GetLastCalPoseSource(referenceID) == CalPoseSource::VRSystemReference;
-		if (!vrSystemRef) {
-			const double skew = std::abs(
-				PoseSampleAgeSeconds(ctx, referenceID) - PoseSampleAgeSeconds(ctx, targetID)
-			);
-			if (skew > ctx.maxPoseTimeSkew) {
-				if (ctx.state == CalibrationState::Continuous) {
-					return false;
-				}
-				ctx.Log("Pose pair rejected: ref/target sample time skew\n");
+		const double skew = std::abs(
+			PoseSampleAgeSeconds(ctx, referenceID) - PoseSampleAgeSeconds(ctx, targetID)
+		);
+		if (skew > ctx.maxPoseTimeSkew) {
+			if (ctx.state == CalibrationState::Continuous) {
 				return false;
 			}
+			ctx.Log("Pose pair rejected: ref/target sample time skew\n");
+			return false;
 		}
 	}
 
@@ -337,15 +310,12 @@ namespace {
 
 	void ApplyChainCalibrationImpl(const CalibrationChain& chain, bool lerp)
 	{
-	if (!chain.valid) {
+	if (!chain.valid || chain.targetID < 0) {
 		return;
 	}
 
-	CalibrationChain resolved = chain;
-	AssignChainTargets(resolved);
-
-	auto vrTrans = VRTranslationVec(resolved.calibratedTranslation);
-	auto vrRot = VRRotationQuat(resolved.calibratedRotation);
+	auto vrTrans = VRTranslationVec(chain.calibratedTranslation);
+	auto vrRot = VRRotationQuat(chain.calibratedRotation);
 
 	for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id) {
 		auto deviceClass = vr::VRSystem()->GetTrackedDeviceClass(id);
@@ -356,48 +326,29 @@ namespace {
 		char buffer[vr::k_unMaxPropertyStringSize] = {};
 		vr::ETrackedPropertyError err = vr::TrackedProp_Success;
 		vr::VRSystem()->GetStringTrackedDeviceProperty(id, vr::Prop_TrackingSystemName_String, buffer, sizeof(buffer), &err);
-		if (err != vr::TrackedProp_Success || std::string(buffer) != resolved.targetTrackingSystem) {
+		if (err != vr::TrackedProp_Success || std::string(buffer) != chain.targetTrackingSystem) {
 			continue;
 		}
 
 		protocol::Request req(protocol::RequestSetDeviceTransform);
-		req.setDeviceTransform = { id, true, vrTrans, vrRot, resolved.calibratedScale };
+		req.setDeviceTransform = { id, true, vrTrans, vrRot, chain.calibratedScale };
 		req.setDeviceTransform.lerp = lerp;
 		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous
-			&& (int)id == resolved.targetID
+			&& (int)id == chain.targetID
 			&& CalCtx.quashTargetInContinuous;
-		SafeDriverSend(req);
+		Driver.SendBlocking(req);
 	}
-	}
-
-	uint64_t GetTrackedDevicePresenceMask() {
-		uint64_t mask = 0;
-		for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id) {
-			if (vr::VRSystem()->GetTrackedDeviceClass(id) != vr::TrackedDeviceClass_Invalid) {
-				mask |= (1ULL << id);
-			}
-		}
-		return mask;
 	}
 
 	bool AssignTargets() {
 		auto state = VRState::Load();
-
-		int resolvedReference = state.ResolveStandbyDevice(
-			CalCtx.referenceStandby, CalCtx.referenceTrackingSystem);
-		if (resolvedReference < 0 && CalCtx.referenceTrackingSystem == "oculus") {
-			resolvedReference = state.FindQuestProHmd();
-		}
-		if (resolvedReference >= 0
-			&& (CalCtx.referenceID < 0 || !VRState::IsDeviceConnected(CalCtx.referenceID))) {
-			CalCtx.referenceID = resolvedReference;
+		
+		if (CalCtx.referenceID < 0) {
+			CalCtx.referenceID = state.FindDevice(CalCtx.referenceStandby.trackingSystem, CalCtx.referenceStandby.model, CalCtx.referenceStandby.serial);
 		}
 
-		const int resolvedTarget = state.ResolveStandbyDevice(
-			CalCtx.targetStandby, CalCtx.targetTrackingSystem);
-		if (resolvedTarget >= 0
-			&& (CalCtx.targetID < 0 || !VRState::IsDeviceConnected(CalCtx.targetID))) {
-			CalCtx.targetID = resolvedTarget;
+		if (CalCtx.targetID < 0) {
+			CalCtx.targetID = state.FindDevice(CalCtx.targetStandby.trackingSystem, CalCtx.targetStandby.model, CalCtx.targetStandby.serial);
 		}
 
 		for (int i = 0; i < CalCtx.MAX_CONTROLLERS; i++) {
@@ -449,36 +400,6 @@ void ApplyChainCalibration(const CalibrationChain& chain, bool lerp)
 	ApplyChainCalibrationImpl(chain, lerp);
 }
 
-void CalibrationContext::ApplyQuestProDefaults() {
-	ApplySlamReferencePreset();
-
-	alignmentSpeedParams.align_speed_tiny = 1.0f;
-	alignmentSpeedParams.align_speed_small = 1.0f;
-	alignmentSpeedParams.align_speed_large = 2.0f;
-
-	continuousCalibrationThreshold = 1.5f;
-	ignoreOutliers = false;
-	requireTriggerPressToApply = false;
-	quashTargetInContinuous = true;
-	lockRelativePosition = true;
-	enableStaticRecalibration = true;
-	autoRecalOnGuardianDrift = false;
-
-	referenceTrackingSystem = "oculus";
-	targetTrackingSystem = "lighthouse";
-	slamReference = true;
-
-	if (referenceStandby.trackingSystem.empty()) {
-		referenceStandby.trackingSystem = "oculus";
-	}
-	if (referenceStandby.model.empty()) {
-		referenceStandby.model = "Meta Quest Pro";
-	}
-	if (targetStandby.trackingSystem.empty()) {
-		targetStandby.trackingSystem = "lighthouse";
-	}
-}
-
 void InitCalibrator()
 {
 	Driver.Connect();
@@ -495,26 +416,20 @@ void ResetAndDisableOffsets(uint32_t id)
 
 	protocol::Request req(protocol::RequestSetDeviceTransform);
 	req.setDeviceTransform = { id, false, zeroV, zeroQ, 1.0 };
-	SafeDriverSend(req);
+	Driver.SendBlocking(req);
 }
 
 static_assert(vr::k_unTrackedDeviceIndex_Hmd == 0, "HMD index expected to be 0");
 
 void ScanAndApplyProfile(CalibrationContext &ctx)
 {
-	AssignTargets();
-	SyncCalCtxToPrimaryChain();
-
 	std::unique_ptr<char[]> buffer_array(new char [vr::k_unMaxPropertyStringSize]);
 	char* buffer = buffer_array.get();
-	bool applyEnabled = ctx.validProfile && ctx.CanApplyCalibrationTransform();
-	bool hmdTrackingSystemOk = true;
+	ctx.enabled = ctx.validProfile;
 
 	protocol::Request setParamsReq(protocol::RequestSetAlignmentSpeedParams);
 	setParamsReq.setAlignmentSpeedParams = ctx.alignmentSpeedParams;
-	if (!SafeDriverSend(setParamsReq)) {
-		ctx.Log("Warning: alignment params IPC failed; continuing device apply\n");
-	}
+	Driver.SendBlocking(setParamsReq);
 
 	for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id)
 	{
@@ -531,7 +446,7 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 			continue;
 		}*/
 
-		if (!applyEnabled)
+		if (!ctx.enabled)
 		{
 			ResetAndDisableOffsets(id);
 			continue;
@@ -571,7 +486,8 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 
 			if (trackingSystem != ctx.referenceTrackingSystem)
 			{
-				hmdTrackingSystemOk = false;
+				// Currently using an HMD with a different tracking system than the calibration.
+				ctx.enabled = false;
 			}
 
 			ResetAndDisableOffsets(id);
@@ -602,25 +518,22 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 			continue;
 		}
 
-		CalibrationChain resolved = CalChains[chainIdx];
-		AssignChainTargets(resolved);
+		const CalibrationChain& chain = CalChains[chainIdx];
 		protocol::Request req(protocol::RequestSetDeviceTransform);
 		req.setDeviceTransform = {
 			id,
 			true,
-			VRTranslationVec(resolved.calibratedTranslation),
-			VRRotationQuat(resolved.calibratedRotation),
-			resolved.calibratedScale
+			VRTranslationVec(chain.calibratedTranslation),
+			VRRotationQuat(chain.calibratedRotation),
+			chain.calibratedScale
 		};
 		req.setDeviceTransform.lerp = CalCtx.state == CalibrationState::Continuous;
 		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous
-			&& (int)id == resolved.targetID
+			&& id == (uint32_t)chain.targetID
 			&& CalCtx.quashTargetInContinuous;
 
-		SafeDriverSend(req);
+		Driver.SendBlocking(req);
 	}
-
-	ctx.enabled = applyEnabled && hmdTrackingSystemOk;
 
 	if (ctx.enabled && ctx.chaperone.valid && ctx.chaperone.autoApply)
 	{
@@ -636,49 +549,11 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 	}
 }
 
-namespace {
-	bool ShouldApplySavedProfile(const CalibrationContext& ctx) {
-		return ctx.validProfile && ctx.CanApplyCalibrationTransform() && (
-			ctx.state == CalibrationState::None
-			|| ctx.state == CalibrationState::Continuous
-			|| ctx.state == CalibrationState::ContinuousStandby
-			|| ctx.state == CalibrationState::Editing
-		);
-	}
-
-	void MaybeScanAndApplySavedProfile(CalibrationContext& ctx, double time) {
-		if (!ShouldApplySavedProfile(ctx)) {
-			return;
-		}
-
-		static uint64_t lastPresenceMask = 0;
-		const uint64_t presenceMask = GetTrackedDevicePresenceMask();
-		const bool devicesChanged = presenceMask != lastPresenceMask;
-		lastPresenceMask = presenceMask;
-
-		// During active continuous cal, only re-apply on hotplug — not every second.
-		if (ctx.state == CalibrationState::Continuous
-			&& calibration.isValid()
-			&& !devicesChanged) {
-			return;
-		}
-
-		const double scanInterval = (ctx.state == CalibrationState::Editing) ? 0.1 : 1.0;
-		if (!devicesChanged && (time - ctx.timeLastScan) < scanInterval) {
-			return;
-		}
-
-		ScanAndApplyProfile(ctx);
-		ctx.timeLastScan = time;
-	}
-}
-
 void StartCalibration() {
 	CalCtx.hasAppliedCalibrationResult = false;
-	CalCtx.warnedTargetPoseMissingFromShmem = false;
 	AssignTargets();
 	CalCtx.state = CalibrationState::Begin;
-	CalCtx.wantedUpdateInterval = 0.05;
+	CalCtx.wantedUpdateInterval = 0.0;
 	CalCtx.messages.clear();
 	calibration.Clear();
 	Metrics::WriteLogAnnotation("StartCalibration");
@@ -688,52 +563,33 @@ void StartContinuousCalibration() {
 	Metrics::EnableSessionLogging();
 	CalCtx.timeLastPeriodicLog = 0;
 	CalCtx.hasAppliedCalibrationResult = false;
-	CalCtx.guardianDrift = GuardianDriftState{};
 	AssignTargets();
 	if (CalCtx.slamReference) {
 		CalCtx.ApplySlamReferencePreset();
-		CalCtx.Log("Quest Pro continuous cal started\n");
+		CalCtx.Log("SLAM reference detected: Quest/inside-out preset applied\n");
 		Metrics::WriteLogAnnotation("SlamReferencePreset");
 	}
 	StartCalibration();
 	CalCtx.state = CalibrationState::Continuous;
-	CalCtx.wantedUpdateInterval = 0.05;
 	CalCtx.enableStaticRecalibration = true;
 	calibration.enableStaticRecalibration = true;
 	calibration.ResetContinuousGuards();
 	calibration.setRelativeTransformation(CalCtx.refToTargetPose, CalCtx.relativePosCalibrated);
 	calibration.lockRelativePosition = CalCtx.lockRelativePosition;
-	if (CalCtx.validProfile && CalCtx.relativePosCalibrated) {
-		calibration.SeedFromProfile(CalCtx.calibratedRotation, CalCtx.calibratedTranslation);
-	}
-	if (CalCtx.lockRelativePosition && !CalCtx.relativePosCalibrated) {
-		CalCtx.Log("Bootstrapping relative pose — move head/body, then hold still\n");
-	}
-	else if (CalCtx.lockRelativePosition) {
+	if (CalCtx.lockRelativePosition) {
 		CalCtx.Log("Relative position locked");
 	}
 	else {
 		CalCtx.Log("Collecting initial samples...");
 	}
 	StartContinuousChains();
-	if (CalCtx.validProfile && CalCtx.relativePosCalibrated) {
-		// Match upstream: apply hide-tracker (quash) immediately when cont cal starts,
-		// not only after the first incremental cal update.
-		ScanAndApplyProfile(CalCtx);
-	}
 	Metrics::WriteLogAnnotation("StartContinuousCalibration");
 }
 
 void EndContinuousCalibration() {
-	SyncPrimaryChainToCalCtx();
 	EndContinuousChains();
 	CalCtx.state = CalibrationState::None;
-	CalCtx.wantedUpdateInterval = 1.0;
-	AssignTargets();
-	if (CalCtx.validProfile) {
-		ScanAndApplyProfile(CalCtx);
-	}
-	SyncCalCtxToPrimaryChain();
+	CalCtx.relativePosCalibrated = false;
 	SaveProfile(CalCtx);
 	Metrics::WriteLogAnnotation("EndContinuousCalibration");
 }
@@ -743,7 +599,6 @@ void CalibrationTick(double time)
 	if (!vr::VRSystem())
 		return;
 
-	try {
 	auto &ctx = CalCtx;
 	if ((time - ctx.timeLastTick) < 0.05)
 		return;
@@ -759,8 +614,12 @@ void CalibrationTick(double time)
 	}
 
 	ctx.timeLastTick = time;
-
-	RefreshDevicePosesForCalibration(ctx, shmem);
+	shmem.ReadNewPoses([&](const protocol::DriverPoseShmem::AugmentedPose& augmented_pose) {
+		if (augmented_pose.deviceId >= 0 && augmented_pose.deviceId < vr::k_unMaxTrackedDeviceCount) {
+			ctx.devicePoses[augmented_pose.deviceId] = augmented_pose.pose;
+			ctx.devicePoseSampleTime[augmented_pose.deviceId] = augmented_pose.sample_time;
+		}
+	});
 
 	const int trackingDeviceId = (ctx.referenceID >= 0) ? ctx.referenceID : vr::k_unTrackedDeviceIndex_Hmd;
 	const auto& trackingPose = ctx.devicePoses[trackingDeviceId];
@@ -770,8 +629,7 @@ void CalibrationTick(double time)
 		ctx.referenceTracking,
 		ctx.slamReference,
 		ctx.maxReferencePoseTimeOffset,
-		ctx.continuousFrozenFrameThreshold,
-		!ctx.slamReference
+		3
 	);
 
 	if (ShouldSkipCalibrationTick(ctx.referenceTracking.quality)) {
@@ -790,21 +648,30 @@ void CalibrationTick(double time)
 
 	if (ctx.state == CalibrationState::Continuous && ctx.slamReference
 		&& ctx.referenceTracking.quality == TrackingQuality::Degraded) {
-		calibration.PruneRecentSamples(1);
+		calibration.PruneRecentSamples(3);
+		return;
 	}
 
 	if (ctx.autoRecalOnGuardianDrift && ctx.state == CalibrationState::Continuous && ctx.slamReference) {
 		if (HandleGuardianDrift(ctx, ctx.guardianDrift, time, calibration)) {
-			EnsureDefaultChain();
-			auto& chain = CalChains[0];
-			if (chain.continuousActive) {
-				chain.calibration.ResetContinuousGuards();
+			for (auto& chain : CalChains) {
+				if (chain.continuousActive) {
+					chain.calibration.Clear();
+					chain.calibration.ResetContinuousGuards();
+				}
 			}
 		}
 	}
 
-	// Apply saved cal to newly connected trackers; re-scan when device presence changes.
-	MaybeScanAndApplySavedProfile(ctx, time);
+	if (ctx.state == CalibrationState::None || ctx.state == CalibrationState::ContinuousStandby
+		|| (ctx.state == CalibrationState::Continuous && !calibration.isValid()))
+	{
+		if ((time - ctx.timeLastScan) >= 1.0)
+		{
+			ScanAndApplyProfile(ctx);
+			ctx.timeLastScan = time;
+		}
+	}
 
 	if (ctx.state == CalibrationState::ContinuousStandby) {
 		if (AssignTargets()) {
@@ -826,7 +693,8 @@ void CalibrationTick(double time)
 	{
 		ctx.wantedUpdateInterval = 0.1;
 
-		if ((time - ctx.timeLastScan) >= 0.1) {
+		if ((time - ctx.timeLastScan) >= 0.1)
+		{
 			ScanAndApplyProfile(ctx);
 			ctx.timeLastScan = time;
 		}
@@ -885,7 +753,7 @@ void CalibrationTick(double time)
 		if (ok) {
 			//ResetAndDisableOffsets(ctx.targetID);
 			ctx.state = CalibrationState::Rotation;
-			ctx.wantedUpdateInterval = 0.05;
+			ctx.wantedUpdateInterval = 0.0;
 
 			CalCtx.Log("Starting calibration...\n");
 			return;
@@ -904,9 +772,7 @@ void CalibrationTick(double time)
 
 	if (ShouldRejectCalibrationSample(ctx.referenceTracking.quality)) {
 		if (ctx.state == CalibrationState::Continuous) {
-			if (!(ctx.slamReference && ctx.referenceTracking.quality == TrackingQuality::Degraded)) {
-				return;
-			}
+			return;
 		}
 	}
 
@@ -920,13 +786,13 @@ void CalibrationTick(double time)
 	if (calibration.SampleCount() < CalCtx.SampleCount()) return;
 	while (calibration.SampleCount() > CalCtx.SampleCount()) calibration.ShiftSample();
 
-	if (CalCtx.state == CalibrationState::Continuous && calibration.SampleCount() >= 3) {
+	if (CalCtx.state == CalibrationState::Continuous && CalCtx.pauseOnReferenceJitter && calibration.SampleCount() >= 3) {
 		const double refJitter = calibration.ReferenceJitter();
 		const double targetJitter = calibration.TargetJitter();
 		Metrics::jitterRef.Push(refJitter);
 		Metrics::jitterTarget.Push(targetJitter);
 
-		if (CalCtx.pauseOnReferenceJitter && refJitter > CalCtx.jitterThreshold) {
+		if (refJitter > CalCtx.jitterThreshold) {
 			CalCtx.Log("Paused continuous cal: high reference jitter\n");
 			return;
 		}
@@ -964,57 +830,34 @@ void CalibrationTick(double time)
 	QueryPerformanceCounter(&start_time);
 		
 	bool lerp = false;
-	bool calUpdated = false;
 
 	if (CalCtx.state == CalibrationState::Continuous) {
-		CalCtx.wantedUpdateInterval = 0.05;
 		CalCtx.messages.clear();
 		calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
 		calibration.lockRelativePosition = CalCtx.lockRelativePosition;
-		calUpdated = calibration.ComputeIncremental(
-			lerp,
-			CalCtx.continuousCalibrationThreshold,
-			CalCtx.maxRelativeErrorThreshold,
-			CalCtx.ignoreOutliers
-		);
+		calibration.ComputeIncremental(lerp, CalCtx.continuousCalibrationThreshold, CalCtx.maxRelativeErrorThreshold, CalCtx.ignoreOutliers);
 	}
 	else {
 		calibration.enableStaticRecalibration = false;
 		calibration.ComputeOneshot(CalCtx.ignoreOutliers);
-		calUpdated = calibration.isValid();
 	}
 
-	if (CalCtx.state == CalibrationState::Continuous) {
-		if (calUpdated && calibration.isValid()) {
-			ctx.calibratedRotation = calibration.EulerRotation();
-			ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0;
-			ctx.refToTargetPose = calibration.RelativeTransformation();
-			const bool wasRelPosCalibrated = ctx.relativePosCalibrated;
-			ctx.relativePosCalibrated = calibration.isRelativeTransformationCalibrated();
-			if (!wasRelPosCalibrated && ctx.relativePosCalibrated) {
-				calibration.ResetContinuousGuards();
-				ctx.warnedTargetPoseMissingFromShmem = false;
-			}
-			if (ctx.CanApplyCalibrationTransform()) {
-				ctx.validProfile = true;
-				SyncCalCtxToPrimaryChain();
-				ApplyChainCalibration(CalChains[0], lerp);
-				MaybeSaveProfile(ctx, time);
-				CalCtx.hasAppliedCalibrationResult = true;
-			}
-		}
-	}
-	else if (calibration.isValid()) {
+	if (calibration.isValid()) {
 		ctx.calibratedRotation = calibration.EulerRotation();
-		ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0;
+		ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0; // convert to cm units for profile storage
 		ctx.refToTargetPose = calibration.RelativeTransformation();
 		ctx.relativePosCalibrated = calibration.isRelativeTransformationCalibrated();
+
+		auto vrTrans = VRTranslationVec(ctx.calibratedTranslation);
+		auto vrRot = VRRotationQuat(Eigen::Quaterniond(calibration.Transformation().rotation()));
+
 		ctx.validProfile = true;
 		SaveProfile(ctx);
 
 		ScanAndApplyProfile(ctx);
 
 		CalCtx.hasAppliedCalibrationResult = true;
+
 		CalCtx.Log("Finished calibration, profile saved\n");
 	} else {
 		CalCtx.Log("Calibration failed.\n");
@@ -1027,10 +870,8 @@ void CalibrationTick(double time)
 	double duration = (end_time.QuadPart - start_time.QuadPart) / (double)freq.QuadPart;
 	Metrics::computationTime.Push(duration * 1000.0);
 
-	if (CalCtx.state != CalibrationState::Continuous) {
-		Metrics::WriteLogEntry();
-	}
-
+	Metrics::WriteLogEntry();
+		
 	if (CalCtx.state != CalibrationState::Continuous) {
 		ctx.state = CalibrationState::None;
 		calibration.Clear();
@@ -1042,6 +883,11 @@ void CalibrationTick(double time)
 		}
 
 		SyncCalCtxToPrimaryChain();
+		for (size_t i = 1; i < CalChains.size(); i++) {
+			if (CalChains[i].continuousActive) {
+				ProcessContinuousChain(CalChains[i], ctx, time);
+			}
+		}
 	}
 
 	if (ctx.state == CalibrationState::Continuous
@@ -1072,9 +918,6 @@ void CalibrationTick(double time)
 			}
 		}
 	}
-	} catch (const std::exception& e) {
-		CalCtx.Log(std::string("Calibration tick error: ") + e.what() + "\n");
-	}
 }
 
 void LoadChaperoneBounds()
@@ -1102,5 +945,5 @@ void ApplyChaperoneBounds()
 
 void DebugApplyRandomOffset() {
 	protocol::Request req(protocol::RequestDebugOffset);
-	SafeDriverSend(req);
+	Driver.SendBlocking(req);
 }

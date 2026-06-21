@@ -19,7 +19,6 @@ struct GuardianDriftState {
 	double lastCheckTime = 0.0;
 	int driftCooldownFrames = 0;
 	int pendingDriftChecks = 0;
-	int pendingUniverseChecks = 0;
 };
 
 bool ReadLiveChaperoneSnapshot(LiveChaperoneSnapshot& out, uint32_t hmdDeviceId);

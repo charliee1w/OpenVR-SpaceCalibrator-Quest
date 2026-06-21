@@ -24,7 +24,6 @@ vr::EVRInitError ServerTrackedDeviceProvider::Init(vr::IVRDriverContext *pDriver
 	alignmentSpeedParams.align_speed_tiny = 0.05f;
 	alignmentSpeedParams.align_speed_small = 0.2f;
 	alignmentSpeedParams.align_speed_large = 2.0f;
-	alignmentSpeedParams.align_rot_speed_scale = 1.0;
 
 	InjectHooks(this, pDriverContext);
 	server.Run();
@@ -144,18 +143,13 @@ void ServerTrackedDeviceProvider::BlendTransform(DeviceTransform& device, const 
 	double lerp = (timestamp.QuadPart - device.lastPoll.QuadPart) / (double)freq.QuadPart;
 	device.lastPoll = timestamp;
 	
-	double rate = GetTransformRate(device.currentRate);
-	double transLerp = lerp * rate;
-	double rotScale = alignmentSpeedParams.align_rot_speed_scale;
-	if (rotScale < 0) rotScale = 0;
-	if (rotScale > 2.0) rotScale = 2.0;
-	double rotLerp = transLerp * rotScale;
-	if (transLerp > 1.0) transLerp = 1.0;
-	if (rotLerp > 1.0) rotLerp = 1.0;
-	if (transLerp < 0 || isnan(transLerp)) transLerp = 0;
-	if (rotLerp < 0 || isnan(rotLerp)) rotLerp = 0;
+	lerp *= GetTransformRate(device.currentRate);
+	if (lerp > 1.0)
+		lerp = 1.0;
+	if (lerp < 0 || isnan(lerp))
+		lerp = 0;
 
-	device.transform = device.transform.interpolateAround(transLerp, rotLerp, device.targetTransform, deviceWorldPose.translation);
+	device.transform = device.transform.interpolateAround(lerp, device.targetTransform, deviceWorldPose.translation);
 }
 
 void ServerTrackedDeviceProvider::ApplyTransform(DeviceTransform& device, vr::DriverPose_t& devicePose) const {
@@ -187,13 +181,11 @@ inline vr::HmdVector3d_t quaternionRotateVector(const vr::HmdQuaternion_t& quat,
 void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTransform& newTransform)
 {
 	auto &tf = transforms[newTransform.openVRID];
-	const bool wasEnabled = tf.enabled;
 	tf.enabled = newTransform.enabled;
-	const bool snapLerp = !newTransform.lerp || (newTransform.enabled && !wasEnabled);
 
 	if (newTransform.updateTranslation) {
 		tf.targetTransform.translation = convert(newTransform.translation);
-		if (snapLerp) {
+		if (!newTransform.lerp) {
 			tf.transform.translation = tf.targetTransform.translation;
 		}
 	}
@@ -201,7 +193,7 @@ void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTr
 	if (newTransform.updateRotation) {
 		tf.targetTransform.rotation = convert(newTransform.rotation);
 
-		if (snapLerp) {
+		if (!newTransform.lerp) {
 			tf.transform.rotation = tf.targetTransform.rotation;
 		}
 	}
@@ -224,7 +216,6 @@ bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 		pose.vecPosition[2] = dbgPos(2);
 	}
 
-	// INVARIANT: shmem pose is always pre-transform (captured before quash/enabled offset below).
 	shmem.SetPose(openVRID, pose);
 
 	auto& tf = transforms[openVRID];
