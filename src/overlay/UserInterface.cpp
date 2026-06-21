@@ -15,6 +15,7 @@
 #include "imgui_extensions.h"
 #include "ui_theme.h"
 #include <cstdio>
+#include <cmath>
 
 void TextWithWidth(const char *label, const char *text, float width);
 void DrawVectorElement(const std::string id, const char* text, double* value, int defaultValue = 0, const char* defaultValueStr = " 0 ");
@@ -89,7 +90,7 @@ void ShowVersionLine() {
 	{
 		ImGui::SameLine();
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-		ImGui::TextUnformatted("  |  close overlay for mouse input");
+		ImGui::TextUnformatted("  |  aim laser at buttons to click");
 		ImGui::PopStyleColor();
 	}
 	ImGui::EndChild();
@@ -177,7 +178,7 @@ static void DrawDeviceStatusCard(const char* id, const char* role, const char* t
 {
 	ImGui::PushID(id);
 	ImVec2 pos = ImGui::GetCursorScreenPos();
-	float width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+	float width = ImGui::GetContentRegionAvail().x;
 	float height = ImGui::GetFrameHeight() * 5.0f;
 	ImVec2 size(width, height);
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -201,6 +202,7 @@ static void DrawDeviceStatusCard(const char* id, const char* role, const char* t
 	drawList->AddRectFilled(pos, ImVec2(pos.x + 4.0f, pos.y + size.y),
 		SpaceCalUI::ColorToU32(accent, 0.95f), 3.0f);
 
+	ImGui::SetNextItemAllowOverlap();
 	ImGui::Dummy(size);
 	ImGui::SetCursorScreenPos(ImVec2(pos.x + 14.0f, pos.y + 10.0f));
 	ImGui::PushStyleColor(ImGuiCol_Text, SpaceCalUI::Accent());
@@ -214,8 +216,15 @@ static void DrawDeviceStatusCard(const char* id, const char* role, const char* t
 	ImGui::PopStyleColor();
 	ImGui::SetCursorScreenPos(ImVec2(pos.x + 14.0f, pos.y + size.y - ImGui::GetTextLineHeight() - 10.0f));
 	ImGui::StatusBadge(status, SpaceCalUI::ColorToU32(accent, 0.85f));
-	ImGui::SetCursorScreenPos(ImVec2(pos.x + size.x + ImGui::GetStyle().ItemSpacing.x, pos.y));
 	ImGui::PopID();
+}
+
+static void FormatMetricValue(char* buf, size_t bufSize, double value, const char* emptyText = "--") {
+	if (!std::isfinite(value) || value <= 0.0) {
+		snprintf(buf, bufSize, "%s", emptyText);
+	} else {
+		snprintf(buf, bufSize, "%.2f", value);
+	}
 }
 
 static void DrawLiveMetricsRow() {
@@ -224,24 +233,30 @@ static void DrawLiveMetricsRow() {
 	const double refJitter = Metrics::jitterRef.last();
 	const double targetJitter = Metrics::jitterTarget.last();
 	const double computeMs = Metrics::computationTime.last();
+	const bool hasMetrics = Metrics::error_currentCal.size() > 0 || Metrics::jitterRef.size() > 0;
 
 	const float cardH = ImGui::GetFrameHeight() * 3.2f;
 	const float rowGap = ImGui::GetStyle().ItemSpacing.y;
 	const ImVec2 rowStart = ImGui::GetCursorScreenPos();
 
-	snprintf(buf, sizeof(buf), "%.1f", errorMm);
-	ImGui::MetricCard("metric_error", "Active error", buf, "mm",
+	if (!hasMetrics) {
+		ImGui::HintText("Metrics appear after continuous cal collects a few samples.");
+		return;
+	}
+
+	FormatMetricValue(buf, sizeof(buf), errorMm, "--");
+	ImGui::MetricCard("metric_error", "Active error", buf, std::isfinite(errorMm) && errorMm > 0.0 ? "mm" : "",
 		errorMm < 10.0 ? SpaceCalUI::StatusOk() : (errorMm < 25.0 ? SpaceCalUI::StatusWarn() : SpaceCalUI::StatusError()));
 	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
-	snprintf(buf, sizeof(buf), "%.2f", computeMs);
-	ImGui::MetricCard("metric_compute", "Frame compute", buf, "ms", SpaceCalUI::AccentMuted());
+	FormatMetricValue(buf, sizeof(buf), computeMs, "--");
+	ImGui::MetricCard("metric_compute", "Frame compute", buf, std::isfinite(computeMs) && computeMs > 0.0 ? "ms" : "", SpaceCalUI::AccentMuted());
 
 	ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + cardH + rowGap));
-	snprintf(buf, sizeof(buf), "%.2f", refJitter);
+	FormatMetricValue(buf, sizeof(buf), refJitter, "--");
 	ImGui::MetricCard("metric_ref_jitter", "Reference jitter", buf, "",
 		refJitter < CalCtx.jitterThreshold ? SpaceCalUI::StatusOk() : SpaceCalUI::StatusWarn());
 	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
-	snprintf(buf, sizeof(buf), "%.2f", targetJitter);
+	FormatMetricValue(buf, sizeof(buf), targetJitter, "--");
 	ImGui::MetricCard("metric_tgt_jitter", "Target jitter", buf, "",
 		targetJitter < CalCtx.jitterThreshold ? SpaceCalUI::StatusOk() : SpaceCalUI::StatusWarn());
 
@@ -406,6 +421,8 @@ void CCal_DrawSettings() {
 		ImGui::TextDisabled("ArcticFox");
 		ImGui::TextDisabled("hekky");
 		ImGui::TextDisabled("pimaker");
+		ImGui::TextDisabled("hyblocker");
+		ImGui::TextDisabled("gore");
 
 		ImGui::EndGroupPanel();
 	}
@@ -456,12 +473,15 @@ void CCal_BasicInfo() {
 	const bool tgtTracking = tgtFound && CalCtx.TargetPoseIsValidSimple();
 
 	const float deviceCardH = ImGui::GetFrameHeight() * 5.0f;
+	ImGui::Columns(2, "ccal_device_cards", false);
 	DrawDeviceStatusCard("ref_card", "Reference", refTrackingSystem,
 		CalCtx.referenceStandby.model.c_str(), CalCtx.referenceStandby.serial.c_str(),
 		refFound, refTracking);
+	ImGui::NextColumn();
 	DrawDeviceStatusCard("tgt_card", "Target", targetTrackingSystem,
 		CalCtx.targetStandby.model.c_str(), CalCtx.targetStandby.serial.c_str(),
 		tgtFound, tgtTracking);
+	ImGui::Columns(1);
 	ImGui::Dummy(ImVec2(0.0f, deviceCardH + ImGui::GetStyle().ItemSpacing.y * 2.0f));
 
 	ImGui::BeginGroupPanel("Live metrics", ImVec2(ImGui::GetWindowContentRegionWidth(), 0));
@@ -535,8 +555,6 @@ void CCal_BasicInfo() {
 	ImGui::EndChild();
 	ImGui::PopStyleColor();
 	ImGui::EndGroupPanel();
-
-	ShowCalibrationDebug(1, 3);
 }
 
 void BuildMenu(bool runningInOverlay)
@@ -658,34 +676,63 @@ void BuildMenu(bool runningInOverlay)
 		ImGui::Button("Calibration in progress...", ImVec2(ImGui::GetWindowContentRegionWidth(), ImGui::GetTextLineHeight() * 2));
 	}
 
+	const ImGuiWindowFlags calModalFlags =
+		(bareWindowFlags & ~ImGuiWindowFlags_NoScrollWithMouse) | ImGuiWindowFlags_NoScrollbar;
+
 	ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x - 40.0f, io.DisplaySize.y - 40.0f), ImGuiCond_Always);
-	if (ImGui::BeginPopupModal("Calibration Progress", nullptr, bareWindowFlags))
+	if (ImGui::BeginPopupModal("Calibration Progress", nullptr, calModalFlags))
 	{
-		ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImVec4(0, 0, 0, 1));
-		for (auto &message : CalCtx.messages)
-		{
-			switch (message.type)
+		static double calModalDoneTime = 0.0;
+		const bool calFinished = CalCtx.state == CalibrationState::None;
+		const float footerHeight = ImGui::GetTextLineHeight() * 2.8f + style.ItemSpacing.y * 2.0f;
+
+		if (calFinished) {
+			if (calModalDoneTime <= 0.0) {
+				calModalDoneTime = ImGui::GetTime();
+			}
+		} else {
+			calModalDoneTime = 0.0;
+		}
+
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 1));
+		if (ImGui::BeginChild("cal_progress_messages", ImVec2(0.0f, -footerHeight), ImGuiChildFlags_Borders)) {
+			for (auto &message : CalCtx.messages)
 			{
-			case CalibrationContext::Message::String:
-				ImGui::TextWrapped(message.str.c_str());
-				break;
-			case CalibrationContext::Message::Progress:
-				float fraction = (float)message.progress / (float)message.target;
-				ImGui::Text("");
-				ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), "");
-				ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetFontSize() - style.FramePadding.y * 2);
-				ImGui::Text(" %d%%", (int)(fraction * 100));
-				break;
+				switch (message.type)
+				{
+				case CalibrationContext::Message::String:
+					ImGui::TextWrapped("%s", message.str.c_str());
+					break;
+				case CalibrationContext::Message::Progress:
+				{
+					float fraction = (float)message.progress / (float)message.target;
+					ImGui::Spacing();
+					ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), "");
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetFontSize() - style.FramePadding.y * 2);
+					ImGui::Text(" %d%%", (int)(fraction * 100));
+					break;
+				}
+				}
 			}
 		}
+		ImGui::EndChild();
 		ImGui::PopStyleColor();
 
-		if (CalCtx.state == CalibrationState::None)
+		if (calFinished)
 		{
-			ImGui::Text("");
-			if (ImGui::Button("Close", ImVec2(ImGui::GetWindowContentRegionWidth(), ImGui::GetTextLineHeight() * 2)))
+			if (runningInOverlay) {
+				ImGui::HintText("Calibration finished. Close below, or it will dismiss automatically.");
+			}
+			if (SpaceCalUI::PrimaryButton("Close", ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight() * 2.2f))) {
 				ImGui::CloseCurrentPopup();
+				calModalDoneTime = 0.0;
+			}
+			// VR overlay: auto-dismiss so a missed laser click cannot trap the user.
+			if (runningInOverlay && calModalDoneTime > 0.0 && ImGui::GetTime() - calModalDoneTime > 2.0) {
+				ImGui::CloseCurrentPopup();
+				calModalDoneTime = 0.0;
+			}
 		}
 
 		ImGui::EndPopup();

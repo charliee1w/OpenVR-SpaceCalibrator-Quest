@@ -165,6 +165,7 @@ void ImGui::MetricCard(const char* id, const char* label, const char* value, con
     drawList->AddRectFilled(pos, ImVec2(pos.x + 4.0f, pos.y + size.y),
         SpaceCalUI::ColorToU32(accent, 0.9f), 2.0f);
 
+    ImGui::SetNextItemAllowOverlap();
     ImGui::Dummy(size);
     ImGui::SetCursorScreenPos(ImVec2(pos.x + 12.0f, pos.y + 8.0f));
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -186,10 +187,14 @@ void ImGui::MetricCard(const char* id, const char* label, const char* value, con
 
 bool ImGui::LabeledSliderFloat(const char* label, float* v, float min, float max, const char* fmt, const char* tooltip, ImGuiSliderFlags flags) {
     ImGui::AlignTextToFramePadding();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float labelWidth = ImClamp(avail * 0.42f, 120.0f, 280.0f);
     ImGui::TextUnformatted(label);
-    ImGui::SameLine(220.0f);
+    ImGui::SameLine(labelWidth);
+    ImGui::PushItemWidth(avail - labelWidth - ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::PushID(label);
     bool changed = ImGui::SliderFloat("##slider", v, min, max, fmt, flags);
+    ImGui::PopItemWidth();
     if (tooltip && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", tooltip);
     }

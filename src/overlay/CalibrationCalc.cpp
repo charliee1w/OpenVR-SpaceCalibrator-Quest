@@ -112,6 +112,19 @@ void CalibrationCalc::PushSample(const Sample& sample) {
 	m_samples.push_back(sample);
 }
 
+void CalibrationCalc::SeedFromProfile(const Eigen::Vector3d& eulerDeg, const Eigen::Vector3d& translationCm) {
+	const auto euler = eulerDeg * EIGEN_PI / 180.0;
+	const Eigen::Quaterniond rotQuat =
+		Eigen::AngleAxisd(euler(0), Eigen::Vector3d::UnitZ()) *
+		Eigen::AngleAxisd(euler(1), Eigen::Vector3d::UnitY()) *
+		Eigen::AngleAxisd(euler(2), Eigen::Vector3d::UnitX());
+
+	m_estimatedTransformation = Eigen::AffineCompact3d::Identity();
+	m_estimatedTransformation.rotate(rotQuat);
+	m_estimatedTransformation.translation() = translationCm * 0.01;
+	m_isValid = true;
+}
+
 void CalibrationCalc::Clear() {
 	m_estimatedTransformation.setIdentity();
 	m_isValid = false;
@@ -450,9 +463,13 @@ double CalibrationCalc::ReferenceJitter() const {
 		sampleCount++;
 	}
 
-	double var_x = sqrt(((sampleCount > 1) ? m_newS.x() / (sampleCount - 1) : 0.0));
-	double var_y = sqrt(((sampleCount > 1) ? m_newS.y() / (sampleCount - 1) : 0.0));
-	double var_z = sqrt(((sampleCount > 1) ? m_newS.z() / (sampleCount - 1) : 0.0));
+	auto axisStdDev = [&](double variance) {
+		return sqrt(std::max(0.0, variance));
+	};
+
+	double var_x = axisStdDev((sampleCount > 1) ? m_newS.x() / (sampleCount - 1) : 0.0);
+	double var_y = axisStdDev((sampleCount > 1) ? m_newS.y() / (sampleCount - 1) : 0.0);
+	double var_z = axisStdDev((sampleCount > 1) ? m_newS.z() / (sampleCount - 1) : 0.0);
 
 	// Take magnitude of standard deviation vector
 	return sqrt(var_x * var_x + var_y * var_y + var_z * var_z);
@@ -780,11 +797,14 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 
 			const bool firstCal = !m_isValid;
 			constexpr double kMinImprovementM = 0.002;
+			constexpr double kStableErrorM = 0.015;
+			constexpr double kMaxRegressionM = 0.03;
 			const bool meaningfulImprovement = !m_isValid || (priorError > relPoseError + kMinImprovementM);
 			const bool withinBand = relPoseError <= std::max(relPoseMaxError, 0.012);
 			const bool beatsPrior = !m_isValid || (relPoseError * threshold < priorError);
+			const bool notCatastrophic = firstCal || !(priorError < kStableErrorM && relPoseError > kMaxRegressionM);
 
-			if (firstCal || (meaningfulImprovement && withinBand && beatsPrior)) {
+			if (notCatastrophic && (firstCal || (meaningfulImprovement && withinBand && beatsPrior))) {
 				m_isValid = true;
 				m_estimatedTransformation = byRelPose;
 				Metrics::calibrationApplied.Push(false);
@@ -896,6 +916,12 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 			newError = relPoseError;
 			calibration = byRelPose;
 		}
+	}
+
+	constexpr double kStableErrorM = 0.015;
+	constexpr double kMaxRegressionM = 0.03;
+	if (m_isValid && priorCalibrationError < kStableErrorM && newError > kMaxRegressionM) {
+		newCalibrationValid = false;
 	}
 
 	if (newCalibrationValid) {

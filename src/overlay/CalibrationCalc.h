@@ -92,6 +92,8 @@ public:
 		m_relativePosCalibrated = calibrated;
 	}
 
+	void SeedFromProfile(const Eigen::Vector3d& eulerDeg, const Eigen::Vector3d& translationCm);
+
 	void PushSample(const Sample& sample);
 	void Clear();
 	void ResetContinuousGuards();

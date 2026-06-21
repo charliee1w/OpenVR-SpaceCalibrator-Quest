@@ -6,7 +6,7 @@
 
 # OpenVR-SpaceCalibrator — Quest SLAM continuous calibration fork
 
-**Version:** `1.5.1-gore-contcal7`  
+**Version:** `1.5.1-gore-contcal8`  
 **Base:** [hyblocker/OpenVR-SpaceCalibrator](https://github.com/hyblocker/OpenVR-SpaceCalibrator) `develop`  
 **License:** MIT (see [LICENSE](LICENSE))
 
@@ -105,7 +105,7 @@ Enable **autostart continuous calibration** in the overlay and save your profile
 
 ### Option A — Build from source (recommended for this fork)
 
-See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. Prebuilt binaries: [GitHub Releases](https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest/releases) (`v1.5.1-contcal7`).
+See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. Prebuilt binaries: [GitHub Releases](https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest/releases) (`v1.5.1-contcal8`).
 
 ### Option B — Steam Space Calibrator + replace binaries
 
@@ -202,7 +202,7 @@ Or manually copy from `bin/artifacts/Release` and `bin/driver_01spacecalibrator/
 .\scripts\validate-install.ps1
 # or manually:
 Test-Path "SteamVR\drivers\01spacecalibrator\bin\win64\driver_01spacecalibrator.dll"
-# Driver log should show: 1.5.1-gore-contcal7 loaded
+# Driver log should show: 1.5.1-gore-contcal8 loaded
 ```
 
 ---
@@ -294,7 +294,7 @@ Both can be installed; they solve alignment differently. See [docs/TRACKING_RESE
 
 - [pushrax](https://github.com/pushrax/OpenVR-SpaceCalibrator) — original Space Calibrator
 - [hyblocker](https://github.com/hyblocker/OpenVR-SpaceCalibrator) — continuous calibration, Steam release
-- This fork — Quest/VD SLAM tuning (contcal series)
+- [gore](https://github.com/charliee1w) — Quest/VD SLAM continuous calibration fork (contcal series)
 
 ---
 

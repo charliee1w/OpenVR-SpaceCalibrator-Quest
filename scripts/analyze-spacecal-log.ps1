@@ -25,7 +25,7 @@ function Get-Percentile([double[]]$Values, [double]$Percentile) {
 function Convert-MetricDouble([string]$Text) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return 0.0 }
     $t = $Text.Trim().ToLowerInvariant()
-    if ($t -eq 'inf' -or $t -eq '-inf' -or $t -eq 'nan') { return [double]::NaN }
+    if ($t -match 'nan|inf') { return [double]::NaN }
     return [double]$Text
 }
 

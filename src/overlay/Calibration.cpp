@@ -576,6 +576,9 @@ void StartContinuousCalibration() {
 	calibration.ResetContinuousGuards();
 	calibration.setRelativeTransformation(CalCtx.refToTargetPose, CalCtx.relativePosCalibrated);
 	calibration.lockRelativePosition = CalCtx.lockRelativePosition;
+	if (CalCtx.validProfile) {
+		calibration.SeedFromProfile(CalCtx.calibratedRotation, CalCtx.calibratedTranslation);
+	}
 	if (CalCtx.lockRelativePosition) {
 		CalCtx.Log("Relative position locked");
 	}

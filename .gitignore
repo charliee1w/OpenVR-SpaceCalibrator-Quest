@@ -14,6 +14,7 @@ profiles/*-baseline*.json
 profiles/*-winner*.json
 docs/AGENT_HANDOFF.md
 *.log
+agent-tools/
 
 # Local agent / MCP tooling (consolidation_memory — working copy only)
 Agents.md

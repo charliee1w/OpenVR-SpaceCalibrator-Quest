@@ -362,6 +362,9 @@ void ShowCalibrationDebug(int rows, int cols) {
 	}
 
 	if (!ImGui::BeginTable("##CalibrationDebug", cols, ImGuiTableFlags_RowBg)) {
+		ImGui::EndChild();
+		ImPlot::PopStyleColor(1);
+		ImGui::PopStyleColor(2);
 		return;
 	}
 

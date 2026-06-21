@@ -1,5 +1,22 @@
 # contcal fork changelog
 
+## 1.5.1-gore-contcal8 (2026-06-21)
+
+Stability release — VR usability, tracking fidelity, log tooling.
+
+| Change | Problem addressed | File(s) |
+|--------|-------------------|---------|
+| **SeedFromProfile** | Continuous cal jumped trackers sideways on start | `CalibrationCalc.*`, `Calibration.cpp`, `CalibrationChain.cpp` |
+| **Catastrophic regression guard** | ~100 mm error spikes on bad rel-pose frames | `CalibrationCalc.cpp` |
+| **ReferenceJitter NaN fix** | Half of session logs showed `-nan(ind)` jitterRef | `CalibrationCalc.cpp` |
+| **VR UI fixes** | Calibration modal stuck; laser blocked by decorative widgets | `UserInterface.cpp`, `imgui_extensions.cpp` |
+| **ImGui assert tooltip** | Red "enable asserts" box in VR dashboard | `SpaceCalibrator.cpp`, `CalibrationDebug.cpp` |
+| **Full tracking apply path** | Perf shortcuts reverted — no debounced save or skipped applies | `Calibration.cpp` |
+| **Adaptive dashboard FPS** | 30 FPS idle / 90 FPS on interaction (overlay only) | `SpaceCalibrator.cpp` |
+| **Log analyzer** | `analyze-spacecal-log.ps1` crashed on `-nan(ind)` | `scripts/analyze-spacecal-log.ps1` |
+
+No driver protocol changes. Rebuild overlay after pull; `deploy.ps1` with SteamVR stopped.
+
 ## 1.5.1-gore-contcal7 (2026-06-20)
 
 UI polish — industrial VR theme and reorganized overlay.

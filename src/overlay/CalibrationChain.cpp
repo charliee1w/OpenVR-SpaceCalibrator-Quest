@@ -168,6 +168,9 @@ void StartContinuousChains() {
 		chain.calibration.setRelativeTransformation(chain.refToTargetPose, chain.relativePosCalibrated);
 		chain.calibration.lockRelativePosition = chain.lockRelativePosition;
 		chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
+		if (chain.valid) {
+			chain.calibration.SeedFromProfile(chain.calibratedRotation, chain.calibratedTranslation);
+		}
 
 		char buf[128];
 		snprintf(buf, sizeof buf, "Continuous chain started: %s -> %s\n",
