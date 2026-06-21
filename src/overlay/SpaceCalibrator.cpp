@@ -92,7 +92,7 @@ static int fboTextureWidth = 0, fboTextureHeight = 0;
 
 static char cwd[MAX_PATH];
 const float MINIMIZED_MAX_FPS = 60.0f;
-static constexpr double DASHBOARD_MAX_FPS = 30.0;
+static constexpr double DASHBOARD_MAX_FPS = 15.0;
 
 enum DWMA_USE_IMMSERSIVE_DARK_MODE_ENUM {
 	DWMA_USE_IMMERSIVE_DARK_MODE = 20,
