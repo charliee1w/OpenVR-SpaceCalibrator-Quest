@@ -8,9 +8,35 @@
 
 std::vector<CalibrationChain> CalChains;
 
+void InitGoreSetup(CalibrationContext& ctx) {
+	EnsureDefaultChain();
+	auto& chain = CalChains[0];
+	chain.referenceTrackingSystem = "oculus";
+	chain.targetTrackingSystem = "lighthouse";
+	chain.lockRelativePosition = true;
+	chain.slamReference = true;
+	chain.name = "Quest SLAM -> Lighthouse FBT";
+
+	ctx.referenceTrackingSystem = chain.referenceTrackingSystem;
+	ctx.targetTrackingSystem = chain.targetTrackingSystem;
+	ctx.lockRelativePosition = chain.lockRelativePosition;
+	ctx.slamReference = true;
+	ctx.quashTargetInContinuous = true;
+
+	if (!ctx.validProfile) {
+		chain.autostartContinuous = true;
+		ctx.ApplySlamReferencePreset();
+	}
+
+	SyncCalCtxToPrimaryChain();
+}
+
 void EnsureDefaultChain() {
 	if (CalChains.empty()) {
 		CalChains.emplace_back();
+	}
+	if (CalChains.size() > 1) {
+		CalChains.resize(1);
 	}
 }
 
@@ -59,10 +85,9 @@ void SyncPrimaryChainToCalCtx() {
 }
 
 int FindChainIndexForTargetSystem(const std::string& trackingSystem) {
-	for (int i = 0; i < (int)CalChains.size(); i++) {
-		if (CalChains[i].valid && CalChains[i].targetTrackingSystem == trackingSystem) {
-			return i;
-		}
+	EnsureDefaultChain();
+	if (CalChains[0].valid && CalChains[0].targetTrackingSystem == trackingSystem) {
+		return 0;
 	}
 	return -1;
 }
@@ -88,102 +113,37 @@ bool AssignChainTargets(CalibrationChain& chain) {
 	return chain.referenceID >= 0 && chain.targetID >= 0;
 }
 
-bool CollectChainSample(CalibrationChain& chain, CalibrationContext& ctx) {
-	return CollectSampleForChain(
-		ctx,
-		chain.calibration,
-		chain.referenceID,
-		chain.targetID,
-		chain.continuousCalibrationOffset,
-		chain.slamReference,
-		chain.lockRelativePosition
-	);
-}
-
-void ProcessContinuousChain(CalibrationChain& chain, CalibrationContext& ctx, double time) {
-	if (!chain.continuousActive || !chain.valid) {
-		return;
-	}
-
-	if (!AssignChainTargets(chain)) {
-		return;
-	}
-
-	if (!CollectChainSample(chain, ctx)) {
-		return;
-	}
-
-	while (chain.calibration.SampleCount() > CalCtx.SampleCount()) {
-		chain.calibration.ShiftSample();
-	}
-	if (chain.calibration.SampleCount() < CalCtx.SampleCount()) {
-		return;
-	}
-
-	if (CalCtx.pauseOnReferenceJitter && chain.calibration.SampleCount() >= 3 && !chain.slamReference) {
-		if (chain.calibration.ReferenceJitter() > CalCtx.jitterThreshold) {
-			return;
-		}
-	}
-
-	bool lerp = false;
-	chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
-	chain.calibration.lockRelativePosition = chain.lockRelativePosition;
-	const bool calUpdated = chain.calibration.ComputeIncremental(
-		lerp,
-		CalCtx.continuousCalibrationThreshold,
-		CalCtx.maxRelativeErrorThreshold,
-		CalCtx.ignoreOutliers
-	);
-
-	if (!calUpdated || !chain.calibration.isValid()) {
-		return;
-	}
-
-	chain.calibratedRotation = chain.calibration.EulerRotation();
-	chain.calibratedTranslation = chain.calibration.Transformation().translation() * 100.0;
-	chain.refToTargetPose = chain.calibration.RelativeTransformation();
-	chain.relativePosCalibrated = chain.calibration.isRelativeTransformationCalibrated();
-
-	ApplyChainCalibration(chain, lerp);
-}
-
 void StartContinuousChains() {
 	SyncCalCtxToPrimaryChain();
 	EnsureDefaultChain();
+	auto& chain = CalChains[0];
 
-	for (auto& chain : CalChains) {
-		if (!chain.valid) continue;
-		if (!chain.autostartContinuous && &chain != &CalChains[0]) continue;
-
-		AssignChainTargets(chain);
-		if (chain.slamReference) {
-			CalCtx.ApplySlamReferencePreset();
-		}
-		chain.continuousActive = true;
-		chain.calibration.Clear();
-		chain.calibration.ResetContinuousGuards();
-		chain.calibration.setRelativeTransformation(chain.refToTargetPose, chain.relativePosCalibrated);
-		chain.calibration.lockRelativePosition = chain.lockRelativePosition;
-		chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
-		if (chain.valid) {
-			chain.calibration.SeedFromProfile(chain.calibratedRotation, chain.calibratedTranslation);
-		}
-
-		char buf[128];
-		snprintf(buf, sizeof buf, "Continuous chain started: %s -> %s\n",
-			chain.referenceTrackingSystem.c_str(),
-			chain.targetTrackingSystem.c_str());
-		CalCtx.Log(buf);
+	AssignChainTargets(chain);
+	if (chain.slamReference) {
+		CalCtx.ApplySlamReferencePreset();
 	}
+	chain.continuousActive = true;
+	chain.calibration.Clear();
+	chain.calibration.ResetContinuousGuards();
+	chain.calibration.setRelativeTransformation(chain.refToTargetPose, chain.relativePosCalibrated);
+	chain.calibration.lockRelativePosition = chain.lockRelativePosition;
+	chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
+	if (chain.valid) {
+		chain.calibration.SeedFromProfile(chain.calibratedRotation, chain.calibratedTranslation);
+	}
+
+	char buf[128];
+	snprintf(buf, sizeof buf, "Continuous cal: %s -> %s\n",
+		chain.referenceTrackingSystem.c_str(),
+		chain.targetTrackingSystem.c_str());
+	CalCtx.Log(buf);
 
 	Metrics::WriteLogAnnotation("StartContinuousChains");
 }
 
 void EndContinuousChains() {
-	for (auto& chain : CalChains) {
-		chain.continuousActive = false;
-	}
+	EnsureDefaultChain();
+	CalChains[0].continuousActive = false;
 	SyncCalCtxToPrimaryChain();
 	Metrics::WriteLogAnnotation("EndContinuousChains");
 }

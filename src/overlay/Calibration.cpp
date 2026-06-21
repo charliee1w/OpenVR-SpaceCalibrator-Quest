@@ -354,16 +354,6 @@ namespace {
 	}
 	}
 
-	uint64_t GetTrackedDevicePresenceMask() {
-		uint64_t mask = 0;
-		for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id) {
-			if (vr::VRSystem()->GetTrackedDeviceClass(id) != vr::TrackedDeviceClass_Invalid) {
-				mask |= (1ULL << id);
-			}
-		}
-		return mask;
-	}
-
 	bool AssignTargets() {
 		auto state = VRState::Load();
 
@@ -586,42 +576,7 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 	}
 }
 
-namespace {
-	bool ShouldApplySavedProfile(const CalibrationContext& ctx) {
-		return ctx.validProfile && (
-			ctx.state == CalibrationState::None
-			|| ctx.state == CalibrationState::Continuous
-			|| ctx.state == CalibrationState::ContinuousStandby
-			|| ctx.state == CalibrationState::Editing
-		);
-	}
 
-	void MaybeScanAndApplySavedProfile(CalibrationContext& ctx, double time) {
-		if (!ShouldApplySavedProfile(ctx)) {
-			return;
-		}
-
-		static uint64_t lastPresenceMask = 0;
-		const uint64_t presenceMask = GetTrackedDevicePresenceMask();
-		const bool devicesChanged = presenceMask != lastPresenceMask;
-		lastPresenceMask = presenceMask;
-
-		// During continuous cal, only rescan when trackers connect — not every second (64 IPC calls).
-		if (ctx.state == CalibrationState::Continuous) {
-			if (!devicesChanged) {
-				return;
-			}
-		} else {
-			const double scanInterval = (ctx.state == CalibrationState::Editing) ? 0.1 : 1.0;
-			if (!devicesChanged && (time - ctx.timeLastScan) < scanInterval) {
-				return;
-			}
-		}
-
-		ScanAndApplyProfile(ctx);
-		ctx.timeLastScan = time;
-	}
-}
 
 void StartCalibration() {
 	CalCtx.hasAppliedCalibrationResult = false;
@@ -705,11 +660,6 @@ void CalibrationTick(double time)
 
 	ctx.timeLastTick = time;
 
-	// Apply saved cal to newly connected trackers before tracking-quality gates.
-	// contcal13 stopped calling ScanAndApplyProfile during continuous cal, which broke
-	// powering trackers on after setup (upstream re-applied every tick).
-	MaybeScanAndApplySavedProfile(ctx, time);
-
 	shmem.ReadNewPoses([&](const protocol::DriverPoseShmem::AugmentedPose& augmented_pose) {
 		if (augmented_pose.deviceId >= 0 && augmented_pose.deviceId < vr::k_unMaxTrackedDeviceCount) {
 			ctx.devicePoses[augmented_pose.deviceId] = augmented_pose.pose;
@@ -750,12 +700,22 @@ void CalibrationTick(double time)
 
 	if (ctx.autoRecalOnGuardianDrift && ctx.state == CalibrationState::Continuous && ctx.slamReference) {
 		if (HandleGuardianDrift(ctx, ctx.guardianDrift, time, calibration)) {
-			for (auto& chain : CalChains) {
-				if (chain.continuousActive) {
-					chain.calibration.Clear();
-					chain.calibration.ResetContinuousGuards();
-				}
+			EnsureDefaultChain();
+			auto& chain = CalChains[0];
+			if (chain.continuousActive) {
+				chain.calibration.Clear();
+				chain.calibration.ResetContinuousGuards();
 			}
+		}
+	}
+
+	// Upstream: periodic profile apply only before continuous cal is valid.
+	if (ctx.state == CalibrationState::None || ctx.state == CalibrationState::ContinuousStandby
+		|| (ctx.state == CalibrationState::Continuous && !calibration.isValid()))
+	{
+		if ((time - ctx.timeLastScan) >= 1.0) {
+			ScanAndApplyProfile(ctx);
+			ctx.timeLastScan = time;
 		}
 	}
 
@@ -778,6 +738,11 @@ void CalibrationTick(double time)
 	if (ctx.state == CalibrationState::Editing)
 	{
 		ctx.wantedUpdateInterval = 0.1;
+
+		if ((time - ctx.timeLastScan) >= 0.1) {
+			ScanAndApplyProfile(ctx);
+			ctx.timeLastScan = time;
+		}
 		return;
 	}
 
@@ -981,40 +946,6 @@ void CalibrationTick(double time)
 		}
 
 		SyncCalCtxToPrimaryChain();
-		for (size_t i = 1; i < CalChains.size(); i++) {
-			if (CalChains[i].continuousActive) {
-				ProcessContinuousChain(CalChains[i], ctx, time);
-			}
-		}
-	}
-
-	if (ctx.state == CalibrationState::Continuous
-		&& ctx.referenceID >= 0 && ctx.targetID >= 0) {
-		if (ctx.timeLastPeriodicLog == 0) {
-			ctx.timeLastPeriodicLog = time;
-		}
-		else if ((time - ctx.timeLastPeriodicLog) >= 1.0) {
-			ctx.timeLastPeriodicLog = time;
-
-			const vr::DriverPose_t& reference = ctx.devicePoses[ctx.referenceID];
-			const vr::DriverPose_t& target = ctx.devicePoses[ctx.targetID];
-			if (reference.poseIsValid && target.poseIsValid) {
-				const bool compensateLatency = ctx.slamReference && ctx.compensatePoseTimeOffset;
-				Pose refPose = ConvertPose(
-					reference,
-					ctx.slamReference && ctx.applyHeadModelToReference,
-					compensateLatency
-				);
-				Pose targetPose = ConvertPose(target, false, false);
-
-				if (ctx.slamReference && ctx.trustTargetYaw && calibration.isRelativeTransformationCalibrated()) {
-					refPose.rot = targetPose.rot * calibration.RelativeTransformation().rotation().inverse();
-				}
-
-				calibration.RecordLiveMetrics(refPose, targetPose);
-				Metrics::WriteLogEntry();
-			}
-		}
 	}
 	} catch (const std::exception& e) {
 		CalCtx.Log(std::string("Calibration tick error: ") + e.what() + "\n");

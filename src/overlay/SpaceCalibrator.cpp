@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "Calibration.h"
+#include "CalibrationChain.h"
 #include "Configuration.h"
 #include "EmbeddedFiles.h"
 #include "UserInterface.h"
@@ -692,6 +693,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		CreateGLFWWindow();
 		InitCalibrator();
 		LoadProfile(CalCtx);
+		InitGoreSetup(CalCtx);
 		RunLoop();
 
 		vr::VR_Shutdown();

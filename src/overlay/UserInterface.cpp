@@ -507,27 +507,6 @@ void CCal_BasicInfo() {
 		ImGui::EndTable();
 	}
 
-	if (CalCtx.slamReference) {
-		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-		ImGui::TextWrapped("SLAM reference preset active (Quest / inside-out).");
-		ImGui::PopStyleColor();
-	}
-
-	EnsureDefaultChain();
-	if (CalChains.size() > 1) {
-		ImGui::BeginGroupPanel("Multi-platform chains", ImVec2(ImGui::GetWindowContentRegionWidth(), 0));
-		ImGui::Text("Active chains: %zu", CalChains.size());
-		for (size_t i = 0; i < CalChains.size(); i++) {
-			const auto& chain = CalChains[i];
-			ImGui::TextDisabled("  [%zu] %s -> %s%s",
-				i,
-				chain.referenceTrackingSystem.c_str(),
-				chain.targetTrackingSystem.c_str(),
-				chain.continuousActive ? " (cont)" : "");
-		}
-		ImGui::EndGroupPanel();
-	}
-
 	{
 		const double errorMm = Metrics::error_currentCal.last();
 		const double computeMs = Metrics::computationTime.last();

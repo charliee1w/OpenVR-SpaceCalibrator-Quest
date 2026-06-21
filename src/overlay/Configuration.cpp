@@ -248,14 +248,14 @@ static void ParseProfile(CalibrationContext &ctx, std::istream &stream)
 	}
 
 	CalChains.clear();
-	for (size_t i = 0; i < arr.size(); i++) {
-		if (!arr[i].is<picojson::object>()) continue;
+	if (arr.size() >= 1 && arr[0].is<picojson::object>()) {
 		CalibrationChain chain;
-		ParseChainObject(arr[i].get<picojson::object>(), chain, ctx, i == 0);
+		ParseChainObject(arr[0].get<picojson::object>(), chain, ctx, true);
 		CalChains.push_back(chain);
 	}
 
 	SyncPrimaryChainToCalCtx();
+	InitGoreSetup(ctx);
 	ctx.validProfile = !CalChains.empty() && CalChains[0].valid;
 }
 
@@ -363,11 +363,9 @@ static void WriteProfile(CalibrationContext &ctx, std::ostream &out)
 	EnsureDefaultChain();
 
 	picojson::array profiles;
-	for (size_t i = 0; i < CalChains.size(); i++) {
-		picojson::value profileV;
-		profileV.set<picojson::object>(WriteChainObject(CalChains[i], ctx, i == 0));
-		profiles.push_back(profileV);
-	}
+	picojson::value profileV;
+	profileV.set<picojson::object>(WriteChainObject(CalChains[0], ctx, true));
+	profiles.push_back(profileV);
 
 	picojson::value profilesV;
 	profilesV.set<picojson::array>(profiles);
@@ -437,6 +435,7 @@ void LoadProfile(CalibrationContext &ctx)
 	if (str == "") {
 		std::cout << "Profile is empty" << std::endl;
 		ctx.Clear();
+		InitGoreSetup(ctx);
 		return;
 	}
 

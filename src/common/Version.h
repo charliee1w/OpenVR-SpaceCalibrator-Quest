@@ -1,3 +1,3 @@
 #pragma once
 
-#define SPACECAL_VERSION_STRING "1.5.1-gore-contcal27"
+#define SPACECAL_VERSION_STRING "1.5.1-gore-contcal28"
