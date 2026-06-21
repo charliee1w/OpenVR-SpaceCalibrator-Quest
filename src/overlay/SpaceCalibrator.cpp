@@ -191,8 +191,43 @@ void CreateGLFWWindow()
 	}
 }
 
+void TeardownGLRenderer() {
+	if (!glRendererInitialized) {
+		return;
+	}
+
+	if (overlayMainHandle && vr::VROverlay()) {
+		vr::VROverlay()->HideOverlay(overlayMainHandle);
+	}
+
+	if (fboHandle) {
+		glDeleteFramebuffers(1, &fboHandle);
+		fboHandle = 0;
+	}
+	if (fboTextureHandle) {
+		glDeleteTextures(1, &fboTextureHandle);
+		fboTextureHandle = 0;
+	}
+
+	ImGui_ImplOpenGL3_Shutdown();
+	ImGui_ImplGlfw_Shutdown();
+	ImPlot::DestroyContext();
+	ImGui::DestroyContext();
+
+	if (glfwWindow) {
+		glfwDestroyWindow(glfwWindow);
+		glfwWindow = nullptr;
+	}
+
+	glRendererInitialized = false;
+}
+
 void TryCreateVROverlay() {
 	if (overlayMainHandle || !vr::VROverlay())
+		return;
+
+	// Don't register a compositor layer until the user actually opens the SteamVR menu.
+	if (!vr::VROverlay()->IsDashboardVisible())
 		return;
 
 	vr::VROverlayError error = vr::VROverlay()->CreateDashboardOverlay(
@@ -213,6 +248,8 @@ void TryCreateVROverlay() {
 	std::string iconPath = cwd;
 	iconPath += "\\icon.png";
 	vr::VROverlay()->SetOverlayFromFile(overlayThumbnailHandle, iconPath.c_str());
+	// Main layer hidden until our dashboard tab is active — not while browsing icons.
+	vr::VROverlay()->HideOverlay(overlayMainHandle);
 }
 
 void ActivateMultipleDrivers()
@@ -353,10 +390,24 @@ void RunLoop() {
 		CalibrationTick(time);
 
 		bool dashboardVisible = false;
+		bool steamMenuOpen = false;
+
+		if (vr::VROverlay()) {
+			steamMenuOpen = vr::VROverlay()->IsDashboardVisible();
+		}
 
 		if (overlayMainHandle && vr::VROverlay())
 		{
 			dashboardVisible = vr::VROverlay()->IsActiveDashboardOverlay(overlayMainHandle);
+
+			static bool overlayShown = false;
+			if (dashboardVisible && !overlayShown) {
+				vr::VROverlay()->ShowOverlay(overlayMainHandle);
+				overlayShown = true;
+			} else if (!dashboardVisible && overlayShown) {
+				vr::VROverlay()->HideOverlay(overlayMainHandle);
+				overlayShown = false;
+			}
 
 			static bool keyboardOpen = false, keyboardJustClosed = false;
 
@@ -444,6 +495,8 @@ void RunLoop() {
 			CreateGLFWWindow();
 			glRendererInitialized = true;
 			lastFrameStartTime = glfwGetTime();
+		} else if (glRendererInitialized && !steamMenuOpen) {
+			TeardownGLRenderer();
 		}
 
 		const bool shouldRender = glRendererInitialized && dashboardVisible;
@@ -700,18 +753,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 
 		vr::VR_Shutdown();
 
-		if (glRendererInitialized) {
-			if (fboHandle)
-				glDeleteFramebuffers(1, &fboHandle);
-
-			if (fboTextureHandle)
-				glDeleteTextures(1, &fboTextureHandle);
-
-			ImGui_ImplOpenGL3_Shutdown();
-			ImGui_ImplGlfw_Shutdown();
-			ImPlot::DestroyContext();
-			ImGui::DestroyContext();
-		}
+		TeardownGLRenderer();
 	}
 	catch (std::runtime_error &e)
 	{
