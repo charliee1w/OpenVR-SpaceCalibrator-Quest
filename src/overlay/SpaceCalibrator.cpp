@@ -38,9 +38,8 @@ constexpr const char* STEAM_MUTEX_KEY = "Global\\MUTEX__SpaceCalibrator_Steam";
 HANDLE hSteamMutex = INVALID_HANDLE_VALUE;
 bool s_isGitHubVersionInstalled = false;
 
-// Do not force discrete GPU for a background calibration process.
-extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000000;
-extern "C" __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 0x00000000;
+extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+extern "C" __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 0x00000001;
 
 void CreateConsole()
 {
@@ -93,17 +92,6 @@ static int fboTextureWidth = 0, fboTextureHeight = 0;
 
 static char cwd[MAX_PATH];
 const float MINIMIZED_MAX_FPS = 60.0f;
-static constexpr double DASHBOARD_MAX_FPS = 15.0;
-static bool glRendererInitialized = false;
-
-static double GetLoopTime() {
-	if (glRendererInitialized && glfwWindow) {
-		return glfwGetTime();
-	}
-	static const auto start = std::chrono::steady_clock::now();
-	const auto now = std::chrono::steady_clock::now();
-	return std::chrono::duration<double>(now - start).count();
-}
 
 enum DWMA_USE_IMMSERSIVE_DARK_MODE_ENUM {
 	DWMA_USE_IMMERSIVE_DARK_MODE = 20,
@@ -191,43 +179,8 @@ void CreateGLFWWindow()
 	}
 }
 
-void TeardownGLRenderer() {
-	if (!glRendererInitialized) {
-		return;
-	}
-
-	if (overlayMainHandle && vr::VROverlay()) {
-		vr::VROverlay()->HideOverlay(overlayMainHandle);
-	}
-
-	if (fboHandle) {
-		glDeleteFramebuffers(1, &fboHandle);
-		fboHandle = 0;
-	}
-	if (fboTextureHandle) {
-		glDeleteTextures(1, &fboTextureHandle);
-		fboTextureHandle = 0;
-	}
-
-	ImGui_ImplOpenGL3_Shutdown();
-	ImGui_ImplGlfw_Shutdown();
-	ImPlot::DestroyContext();
-	ImGui::DestroyContext();
-
-	if (glfwWindow) {
-		glfwDestroyWindow(glfwWindow);
-		glfwWindow = nullptr;
-	}
-
-	glRendererInitialized = false;
-}
-
 void TryCreateVROverlay() {
 	if (overlayMainHandle || !vr::VROverlay())
-		return;
-
-	// Don't register a compositor layer until the user actually opens the SteamVR menu.
-	if (!vr::VROverlay()->IsDashboardVisible())
 		return;
 
 	vr::VROverlayError error = vr::VROverlay()->CreateDashboardOverlay(
@@ -248,8 +201,6 @@ void TryCreateVROverlay() {
 	std::string iconPath = cwd;
 	iconPath += "\\icon.png";
 	vr::VROverlay()->SetOverlayFromFile(overlayThumbnailHandle, iconPath.c_str());
-	// Main layer hidden until our dashboard tab is active — not while browsing icons.
-	vr::VROverlay()->HideOverlay(overlayMainHandle);
 }
 
 void ActivateMultipleDrivers()
@@ -381,70 +332,56 @@ bool UninstallGithubSpaceCalibrator() {
 	return false;
 }
 
-double lastFrameStartTime = 0;
+double lastFrameStartTime = glfwGetTime();
 void RunLoop() {
-	while (!glfwWindow || !glfwWindowShouldClose(glfwWindow))
+	while (!glfwWindowShouldClose(glfwWindow))
 	{
 		TryCreateVROverlay();
-		const double time = GetLoopTime();
+		double time = glfwGetTime();
 		CalibrationTick(time);
 
 		bool dashboardVisible = false;
-		bool steamMenuOpen = false;
-
-		if (vr::VROverlay()) {
-			steamMenuOpen = vr::VROverlay()->IsDashboardVisible();
-		}
+		int width, height;
+		glfwGetFramebufferSize(glfwWindow, &width, &height);
+		const bool windowVisible = (width > 0 && height > 0);
 
 		if (overlayMainHandle && vr::VROverlay())
 		{
+			auto &io = ImGui::GetIO();
 			dashboardVisible = vr::VROverlay()->IsActiveDashboardOverlay(overlayMainHandle);
-
-			static bool overlayShown = false;
-			if (dashboardVisible && !overlayShown) {
-				vr::VROverlay()->ShowOverlay(overlayMainHandle);
-				overlayShown = true;
-			} else if (!dashboardVisible && overlayShown) {
-				vr::VROverlay()->HideOverlay(overlayMainHandle);
-				overlayShown = false;
-			}
 
 			static bool keyboardOpen = false, keyboardJustClosed = false;
 
-			if (glRendererInitialized) {
-				auto &io = ImGui::GetIO();
+			if (keyboardJustClosed && keyboardOpen)
+			{
+				ImGui::ClearActiveID();
+				keyboardOpen = false;
+			}
+			else if (keyboardJustClosed)
+			{
+				keyboardJustClosed = false;
+			}
+			else if (!io.WantTextInput)
+			{
+				keyboardOpen = false;
+			}
+			else if (io.WantTextInput && !keyboardOpen && !keyboardJustClosed)
+			{
+				int id = ImGui::GetActiveID();
+				auto textInfo = ImGui::GetInputTextState(id);
 
-				if (keyboardJustClosed && keyboardOpen)
-				{
-					ImGui::ClearActiveID();
-					keyboardOpen = false;
-				}
-				else if (keyboardJustClosed)
-				{
-					keyboardJustClosed = false;
-				}
-				else if (!io.WantTextInput)
-				{
-					keyboardOpen = false;
-				}
-				else if (io.WantTextInput && !keyboardOpen && !keyboardJustClosed)
-				{
-					int id = ImGui::GetActiveID();
-					auto textInfo = ImGui::GetInputTextState(id);
+				if (textInfo != nullptr) {
+					textBuf[0] = 0;
+					int len = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, textBuf, sizeof(textBuf), nullptr, nullptr);
+					textBuf[std::min(static_cast<size_t>(len), sizeof(textBuf) - 1)] = 0;
 
-					if (textInfo != nullptr) {
-						textBuf[0] = 0;
-						int len = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, textBuf, sizeof(textBuf), nullptr, nullptr);
-						textBuf[std::min(static_cast<size_t>(len), sizeof(textBuf) - 1)] = 0;
+					uint32_t unFlags = 0;
 
-						uint32_t unFlags = 0;
-
-						vr::VROverlay()->ShowKeyboardForOverlay(
-							overlayMainHandle, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
-							unFlags, "Space Calibrator Overlay", sizeof textBuf, textBuf, 0
-						);
-						keyboardOpen = true;
-					}
+					vr::VROverlay()->ShowKeyboardForOverlay(
+						overlayMainHandle, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
+						unFlags, "Space Calibrator Overlay", sizeof textBuf, textBuf, 0
+					);
+					keyboardOpen = true;
 				}
 			}
 
@@ -453,25 +390,22 @@ void RunLoop() {
 			{
 				switch (vrEvent.eventType) {
 				case vr::VREvent_MouseMove:
-					if (glRendererInitialized) ImGui::GetIO().AddMousePosEvent(vrEvent.data.mouse.x, vrEvent.data.mouse.y);
+					io.AddMousePosEvent(vrEvent.data.mouse.x, vrEvent.data.mouse.y);
 					break;
 				case vr::VREvent_MouseButtonDown:
-					if (glRendererInitialized) ImGui::GetIO().AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, true);
+					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, true);
 					break;
 				case vr::VREvent_MouseButtonUp:
-					if (glRendererInitialized) ImGui::GetIO().AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, false);
+					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, false);
 					break;
 				case vr::VREvent_ScrollDiscrete:
 				{
-					if (glRendererInitialized) {
-						float x = vrEvent.data.scroll.xdelta * 360.0f * 8.0f;
-						float y = vrEvent.data.scroll.ydelta * 360.0f * 8.0f;
-						ImGui::GetIO().AddMouseWheelEvent(x, y);
-					}
+					float x = vrEvent.data.scroll.xdelta * 360.0f * 8.0f;
+					float y = vrEvent.data.scroll.ydelta * 360.0f * 8.0f;
+					io.AddMouseWheelEvent(x, y);
 					break;
 				}
 				case vr::VREvent_KeyboardDone: {
-					if (!glRendererInitialized) break;
 					vr::VROverlay()->GetKeyboardText(textBuf, sizeof textBuf);
 
 					int id = ImGui::GetActiveID();
@@ -481,7 +415,7 @@ void RunLoop() {
 					MultiByteToWideChar(CP_UTF8, 0, textBuf, -1, (LPWSTR)textInfo->TextA.Data, bufSize);
 					textInfo->CurLenA = bufSize;
 					textInfo->CurLenA = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, nullptr, 0, nullptr, nullptr);
-					
+
 					keyboardJustClosed = true;
 					break;
 				}
@@ -491,21 +425,10 @@ void RunLoop() {
 			}
 		}
 
-		if (dashboardVisible && !glRendererInitialized) {
-			CreateGLFWWindow();
-			glRendererInitialized = true;
-			lastFrameStartTime = glfwGetTime();
-		} else if (glRendererInitialized && !steamMenuOpen) {
-			TeardownGLRenderer();
-		}
-
-		const bool shouldRender = glRendererInitialized && dashboardVisible;
-
-		if (shouldRender)
+		if (windowVisible || dashboardVisible)
 		{
 			auto &io = ImGui::GetIO();
-			
-			// These change state now, so we must execute these before doing our own modifications to the io state for VR
+
 			ImGui_ImplOpenGL3_NewFrame();
 			ImGui_ImplGlfw_NewFrame();
 
@@ -521,7 +444,6 @@ void RunLoop() {
 
 			BuildMainWindow(dashboardVisible);
 
-			// @TODO: Move to a separate function, for now it works
 			static bool githubPopupDismissed = false;
 
 			if (s_isGitHubVersionInstalled && !githubPopupDismissed) {
@@ -558,40 +480,46 @@ void RunLoop() {
 
 			glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-			vr::Texture_t vrTex = {
-				.handle = (void*)
+			if (width && height)
+			{
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, fboHandle);
+				glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+				glfwSwapBuffers(glfwWindow);
+			}
+
+			if (dashboardVisible)
+			{
+				vr::Texture_t vrTex = {
+					.handle = (void*)
 #if defined _WIN64 || defined _LP64
-				(uint64_t)
+					(uint64_t)
 #endif
-					fboTextureHandle,
-				.eType = vr::TextureType_OpenGL,
-				.eColorSpace = vr::ColorSpace_Auto,
-			};
+						fboTextureHandle,
+					.eType = vr::TextureType_OpenGL,
+					.eColorSpace = vr::ColorSpace_Auto,
+				};
 
-			vr::HmdVector2_t mouseScale = { (float) fboTextureWidth, (float) fboTextureHeight };
+				vr::HmdVector2_t mouseScale = { (float) fboTextureWidth, (float) fboTextureHeight };
 
-			vr::VROverlay()->SetOverlayTexture(overlayMainHandle, &vrTex);
-			vr::VROverlay()->SetOverlayMouseScale(overlayMainHandle, &mouseScale);
+				vr::VROverlay()->SetOverlayTexture(overlayMainHandle, &vrTex);
+				vr::VROverlay()->SetOverlayMouseScale(overlayMainHandle, &mouseScale);
+			}
 		}
 
-		const double dashboardInterval = 1.0 / DASHBOARD_MAX_FPS;
+		const double dashboardInterval = 1.0 / 90.0;
 		double waitEventsTimeout = std::max(CalCtx.wantedUpdateInterval, dashboardInterval);
 
 		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
 			waitEventsTimeout = dashboardInterval;
 
 		if (immediateRedraw) {
+			waitEventsTimeout = 0;
 			immediateRedraw = false;
-			waitEventsTimeout = std::min(waitEventsTimeout, dashboardInterval);
 		}
 
-		if (glRendererInitialized && glfwWindow) {
-			glfwWaitEventsTimeout(waitEventsTimeout);
-		} else {
-			std::this_thread::sleep_for(std::chrono::duration<double>(waitEventsTimeout));
-		}
+		glfwWaitEventsTimeout(waitEventsTimeout);
 
-		if (shouldRender && glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED) != 0)
+		if (glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED))
 		{
 			double targetFrameTime = 1 / MINIMIZED_MAX_FPS;
 			double waitTime = targetFrameTime - (glfwGetTime() - lastFrameStartTime);
@@ -599,7 +527,7 @@ void RunLoop() {
 			{
 				std::this_thread::sleep_for(std::chrono::duration<double>(waitTime));
 			}
-		
+
 			lastFrameStartTime += targetFrameTime;
 		}
 	}
@@ -746,6 +674,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 			}
 		}
 		VerifySetupCorrect();
+		CreateGLFWWindow();
 		InitCalibrator();
 		LoadProfile(CalCtx);
 		InitGoreSetup(CalCtx);
@@ -753,7 +682,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 
 		vr::VR_Shutdown();
 
-		TeardownGLRenderer();
+		if (fboHandle)
+			glDeleteFramebuffers(1, &fboHandle);
+
+		if (fboTextureHandle)
+			glDeleteTextures(1, &fboTextureHandle);
+
+		ImGui_ImplOpenGL3_Shutdown();
+		ImGui_ImplGlfw_Shutdown();
+		ImPlot::DestroyContext();
+		ImGui::DestroyContext();
 	}
 	catch (std::runtime_error &e)
 	{
