@@ -212,6 +212,12 @@ void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTr
 
 bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr::DriverPose_t &pose)
 {
+	auto& tf = transforms[openVRID];
+	// Pose hook runs on every device every frame; skip work for devices we never touch.
+	if (openVRID != 0 && !tf.enabled && !tf.quash) {
+		return true;
+	}
+
 	// Apply debug pose before anything else
 	if (openVRID > 0) {
 		auto dbgPos = convert(pose.vecPosition) + debugTransform;
@@ -223,8 +229,6 @@ bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 	}
 
 	shmem.SetPose(openVRID, pose);
-
-	auto& tf = transforms[openVRID];
 
 	if (tf.quash) {
 		pose.vecPosition[0] = -pose.vecWorldFromDriverTranslation[0];

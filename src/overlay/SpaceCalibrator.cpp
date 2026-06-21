@@ -201,6 +201,8 @@ void TryCreateVROverlay() {
 	std::string iconPath = cwd;
 	iconPath += "\\icon.png";
 	vr::VROverlay()->SetOverlayFromFile(overlayThumbnailHandle, iconPath.c_str());
+	// Keep compositor from compositing this layer until the SteamVR dashboard is open.
+	vr::VROverlay()->HideOverlay(overlayMainHandle);
 }
 
 void ActivateMultipleDrivers()
@@ -428,12 +430,20 @@ void RunLoop() {
 			}
 		}
 
-		const bool iconified = glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED) != 0;
-		const bool windowFocused = glfwGetWindowAttrib(glfwWindow, GLFW_FOCUSED) != 0;
-		// Never burn GPU on a hidden/restored taskbar window — dashboard overlay only.
-		const bool windowVisible = windowFocused && (width > 0 && height > 0 && !iconified);
-		const bool shouldRender = dashboardVisible || windowVisible;
-		
+		// vrcompositor only composites us when the dashboard is open — never from desktop mirror.
+		static bool overlayShown = false;
+		if (overlayMainHandle && vr::VROverlay()) {
+			if (dashboardVisible && !overlayShown) {
+				vr::VROverlay()->ShowOverlay(overlayMainHandle);
+				overlayShown = true;
+			} else if (!dashboardVisible && overlayShown) {
+				vr::VROverlay()->HideOverlay(overlayMainHandle);
+				overlayShown = false;
+			}
+		}
+
+		const bool shouldRender = dashboardVisible;
+
 		if (shouldRender)
 		{
 			auto &io = ImGui::GetIO();
@@ -491,15 +501,14 @@ void RunLoop() {
 
 			glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-			if (windowVisible)
+			// Cap compositor texture uploads — SetOverlayTexture feeds vrcompositor directly.
+			static double lastOverlayTextureUpload = 0;
+			const double nowUpload = glfwGetTime();
+			const double overlayUploadInterval = 1.0 / 30.0;
+			if ((nowUpload - lastOverlayTextureUpload) >= overlayUploadInterval)
 			{
-				glBindFramebuffer(GL_READ_FRAMEBUFFER, fboHandle);
-				glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-				glfwSwapBuffers(glfwWindow);
-			}
+				lastOverlayTextureUpload = nowUpload;
 
-			if (dashboardVisible)
-			{
 				vr::Texture_t vrTex = {
 					.handle = (void*)
 #if defined _WIN64 || defined _LP64
@@ -517,14 +526,14 @@ void RunLoop() {
 			}
 		}
 
-		const double dashboardInterval = 1.0 / 90.0; // fps
+		const double dashboardInterval = 1.0 / 30.0;
 		double waitEventsTimeout = std::max(CalCtx.wantedUpdateInterval, dashboardInterval);
 
 		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
 			waitEventsTimeout = dashboardInterval;
 
 		if (!shouldRender) {
-			waitEventsTimeout = std::max(waitEventsTimeout, 0.25);
+			waitEventsTimeout = std::max(waitEventsTimeout, 1.0);
 		}
 
 		if (immediateRedraw) {
@@ -534,8 +543,7 @@ void RunLoop() {
 
 		glfwWaitEventsTimeout(waitEventsTimeout);
 
-		// Swap interval is ignored while iconified; cap render rate ourselves.
-		if (shouldRender && iconified)
+		if (shouldRender && glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED) != 0)
 		{
 			double targetFrameTime = 1 / MINIMIZED_MAX_FPS;
 			double waitTime = targetFrameTime - (glfwGetTime() - lastFrameStartTime);
