@@ -606,9 +606,16 @@ namespace {
 		const bool devicesChanged = presenceMask != lastPresenceMask;
 		lastPresenceMask = presenceMask;
 
-		const double scanInterval = (ctx.state == CalibrationState::Editing) ? 0.1 : 1.0;
-		if (!devicesChanged && (time - ctx.timeLastScan) < scanInterval) {
-			return;
+		// During continuous cal, only rescan when trackers connect — not every second (64 IPC calls).
+		if (ctx.state == CalibrationState::Continuous) {
+			if (!devicesChanged) {
+				return;
+			}
+		} else {
+			const double scanInterval = (ctx.state == CalibrationState::Editing) ? 0.1 : 1.0;
+			if (!devicesChanged && (time - ctx.timeLastScan) < scanInterval) {
+				return;
+			}
 		}
 
 		ScanAndApplyProfile(ctx);

@@ -127,9 +127,10 @@ void CreateGLFWWindow()
 	glfwSwapInterval(1);
 	gl3wInit();
 
-	// Minimise the window
+	// Hide the desktop mirror window — UI is via SteamVR dashboard only.
 	glfwIconifyWindow(glfwWindow);
 	HWND windowHwmd = glfwGetWin32Window(glfwWindow);
+	ShowWindow(windowHwmd, SW_HIDE);
 	EnableDarkModeTopBar(windowHwmd);
 
 	// Load icon and set it in the window
@@ -427,8 +428,9 @@ void RunLoop() {
 		}
 
 		const bool iconified = glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED) != 0;
-		// Iconified windows still report a framebuffer size; only mirror to desktop when restored.
-		const bool windowVisible = (width > 0 && height > 0 && !iconified);
+		const bool windowFocused = glfwGetWindowAttrib(glfwWindow, GLFW_FOCUSED) != 0;
+		// Never burn GPU on a hidden/restored taskbar window — dashboard overlay only.
+		const bool windowVisible = windowFocused && (width > 0 && height > 0 && !iconified);
 		const bool shouldRender = dashboardVisible || windowVisible;
 		
 		if (shouldRender)
@@ -519,6 +521,10 @@ void RunLoop() {
 
 		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
 			waitEventsTimeout = dashboardInterval;
+
+		if (!shouldRender) {
+			waitEventsTimeout = std::max(waitEventsTimeout, 0.25);
+		}
 
 		if (immediateRedraw) {
 			immediateRedraw = false;
