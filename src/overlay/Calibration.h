@@ -51,7 +51,7 @@ struct CalibrationContext
 	bool validProfile = false;
 	bool clearOnLog = false;
 	bool quashTargetInContinuous = false;
-	double timeLastTick = 0, timeLastScan = 0, timeLastAssign = 0, timeLastPeriodicLog = 0;
+	double timeLastTick = 0, timeLastScan = 0, timeLastAssign = 0, timeLastPeriodicLog = 0, timeLastProfileSave = 0;
 	bool ignoreOutliers = false;
 	double wantedUpdateInterval = 1.0;
 	float jitterThreshold = 3.0f;
@@ -299,6 +299,7 @@ struct CalibrationChain;
 void ApplyChainCalibration(const CalibrationChain& chain, bool lerp);
 
 void InitCalibrator();
+void ScanAndApplyProfile(CalibrationContext& ctx);
 void CalibrationTick(double time);
 void StartCalibration();
 void StartContinuousCalibration();

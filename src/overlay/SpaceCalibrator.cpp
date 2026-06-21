@@ -3,7 +3,6 @@
 #include "Configuration.h"
 #include "EmbeddedFiles.h"
 #include "UserInterface.h"
-#include "ui_theme.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -152,17 +151,12 @@ void CreateGLFWWindow()
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 	io.IniFilename = nullptr;
-	// Log recoverable UI mistakes to debug output; don't show the red dev tooltip in VR.
-	io.ConfigErrorRecoveryEnableTooltip = false;
-	io.ConfigErrorRecoveryEnableAssert = false;
-	io.ConfigErrorRecoveryEnableDebugLog = true;
 	io.Fonts->AddFontFromMemoryCompressedTTF(DroidSans_compressed_data, DroidSans_compressed_size, 24.0f);
 
 	ImGui_ImplGlfw_InitForOpenGL(glfwWindow, true);
 	ImGui_ImplOpenGL3_Init("#version 330");
 
 	ImGui::StyleColorsDark();
-	SpaceCalUI::ApplyTheme();
 
 	glGenTextures(1, &fboTextureHandle);
 	glBindTexture(GL_TEXTURE_2D, fboTextureHandle);
@@ -262,15 +256,8 @@ void InitVR()
 static char textBuf[0x400] = {};
 
 static bool immediateRedraw;
-static double lastDashboardInteractionTime = 0;
-
-static void NoteDashboardInteraction() {
-	lastDashboardInteractionTime = glfwGetTime();
-}
-
 void RequestImmediateRedraw() {
 	immediateRedraw = true;
-	NoteDashboardInteraction();
 }
 
 bool UninstallGithubSpaceCalibrator() {
@@ -344,7 +331,6 @@ bool UninstallGithubSpaceCalibrator() {
 }
 
 double lastFrameStartTime = glfwGetTime();
-
 void RunLoop() {
 	while (!glfwWindowShouldClose(glfwWindow))
 	{
@@ -407,22 +393,18 @@ void RunLoop() {
 				switch (vrEvent.eventType) {
 				case vr::VREvent_MouseMove:
 					io.AddMousePosEvent(vrEvent.data.mouse.x, vrEvent.data.mouse.y);
-					NoteDashboardInteraction();
 					break;
 				case vr::VREvent_MouseButtonDown:
 					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, true);
-					NoteDashboardInteraction();
 					break;
 				case vr::VREvent_MouseButtonUp:
 					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, false);
-					NoteDashboardInteraction();
 					break;
 				case vr::VREvent_ScrollDiscrete:
 				{
 					float x = vrEvent.data.scroll.xdelta * 360.0f * 8.0f;
 					float y = vrEvent.data.scroll.ydelta * 360.0f * 8.0f;
 					io.AddMouseWheelEvent(x, y);
-					NoteDashboardInteraction();
 					break;
 				}
 				case vr::VREvent_KeyboardDone: {
@@ -464,10 +446,6 @@ void RunLoop() {
 			ImGui::NewFrame();
 
 			BuildMainWindow(dashboardVisible);
-
-			if (dashboardVisible && (io.WantCaptureMouse || io.WantCaptureKeyboard)) {
-				NoteDashboardInteraction();
-			}
 
 			// @TODO: Move to a separate function, for now it works
 			static bool githubPopupDismissed = false;
@@ -532,18 +510,11 @@ void RunLoop() {
 			}
 		}
 
-		const double now = glfwGetTime();
-		const bool dashboardRecentlyActive = dashboardVisible
-			&& (now - lastDashboardInteractionTime) < 2.0;
-		const double dashboardInterval = 1.0 / (dashboardRecentlyActive ? 90.0 : 30.0);
-		double waitEventsTimeout = CalCtx.wantedUpdateInterval;
-		if (dashboardVisible) {
-			if (waitEventsTimeout <= 0) {
-				waitEventsTimeout = dashboardInterval;
-			} else {
-				waitEventsTimeout = std::min(waitEventsTimeout, dashboardInterval);
-			}
-		}
+		const double dashboardInterval = 1.0 / 90.0; // fps
+		double waitEventsTimeout = std::max(CalCtx.wantedUpdateInterval, dashboardInterval);
+
+		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
+			waitEventsTimeout = dashboardInterval;
 
 		if (immediateRedraw) {
 			waitEventsTimeout = 0;

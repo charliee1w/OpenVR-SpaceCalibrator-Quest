@@ -14,14 +14,21 @@ struct VRDevice
 	vr::ETrackedControllerRole controllerRole = vr::ETrackedControllerRole::TrackedControllerRole_Invalid;
 };
 
+struct StandbyDevice;
+
 struct VRState
 {
 	std::vector<std::string> trackingSystems;
 	std::vector<VRDevice> devices;
 
 	[[nodiscard]] int FindDevice(const std::string& trackingSystem, const std::string& model, const std::string& serial) const;
+	[[nodiscard]] int ResolveStandbyDevice(
+		const StandbyDevice& standby,
+		const std::string& fallbackTrackingSystem
+	) const;
 
 	static bool IsSlamTrackingSystem(const std::string& trackingSystem);
+	static bool IsDeviceConnected(int deviceId);
 
 	static VRState Load();
 };

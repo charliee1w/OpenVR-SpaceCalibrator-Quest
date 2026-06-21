@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "VRState.h"
+#include "Calibration.h"
 
 VRState VRState::Load()
 {
@@ -90,6 +91,13 @@ VRState VRState::Load()
 	return state;
 }
 
+bool VRState::IsDeviceConnected(int deviceId) {
+	if (deviceId < 0 || !vr::VRSystem()) {
+		return false;
+	}
+	return vr::VRSystem()->GetTrackedDeviceClass(deviceId) != vr::TrackedDeviceClass_Invalid;
+}
+
 bool VRState::IsSlamTrackingSystem(const std::string& trackingSystem) {
 	// Inside-out SLAM HMDs: high baseline pose noise, IMU extrapolation, guardian drift.
 	return trackingSystem == "oculus"
@@ -98,6 +106,22 @@ bool VRState::IsSlamTrackingSystem(const std::string& trackingSystem) {
 		|| trackingSystem == "pico"
 		|| trackingSystem == "nreal"
 		|| trackingSystem == "euler";
+}
+
+int VRState::ResolveStandbyDevice(
+	const StandbyDevice& standby,
+	const std::string& fallbackTrackingSystem
+) const {
+	if (standby.serial.empty() && standby.model.empty()) {
+		return -1;
+	}
+	const std::string& trackingSystem = !standby.trackingSystem.empty()
+		? standby.trackingSystem
+		: fallbackTrackingSystem;
+	if (trackingSystem.empty()) {
+		return -1;
+	}
+	return FindDevice(trackingSystem, standby.model, standby.serial);
 }
 
 int VRState::FindDevice(const std::string& trackingSystem, const std::string& model, const std::string& serial) const {

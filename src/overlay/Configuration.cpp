@@ -457,3 +457,13 @@ void SaveProfile(CalibrationContext &ctx)
 	WriteProfile(ctx, io);
 	WriteRegistryKey(io.str());
 }
+
+void MaybeSaveProfile(CalibrationContext &ctx, double time, bool force)
+{
+	constexpr double kMinSaveIntervalSec = 5.0;
+	if (!force && ctx.timeLastProfileSave > 0 && (time - ctx.timeLastProfileSave) < kMinSaveIntervalSec) {
+		return;
+	}
+	SaveProfile(ctx);
+	ctx.timeLastProfileSave = time;
+}

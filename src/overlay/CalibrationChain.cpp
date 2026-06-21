@@ -70,20 +70,18 @@ int FindChainIndexForTargetSystem(const std::string& trackingSystem) {
 bool AssignChainTargets(CalibrationChain& chain) {
 	auto state = VRState::Load();
 
-	if (chain.referenceID < 0) {
-		chain.referenceID = state.FindDevice(
-			chain.referenceStandby.trackingSystem,
-			chain.referenceStandby.model,
-			chain.referenceStandby.serial
-		);
+	const int resolvedReference = state.ResolveStandbyDevice(
+		chain.referenceStandby, chain.referenceTrackingSystem);
+	if (resolvedReference >= 0
+		&& (chain.referenceID < 0 || !VRState::IsDeviceConnected(chain.referenceID))) {
+		chain.referenceID = resolvedReference;
 	}
 
-	if (chain.targetID < 0) {
-		chain.targetID = state.FindDevice(
-			chain.targetStandby.trackingSystem,
-			chain.targetStandby.model,
-			chain.targetStandby.serial
-		);
+	const int resolvedTarget = state.ResolveStandbyDevice(
+		chain.targetStandby, chain.targetTrackingSystem);
+	if (resolvedTarget >= 0
+		&& (chain.targetID < 0 || !VRState::IsDeviceConnected(chain.targetID))) {
+		chain.targetID = resolvedTarget;
 	}
 
 	chain.slamReference = VRState::IsSlamTrackingSystem(chain.referenceTrackingSystem);
@@ -131,14 +129,14 @@ void ProcessContinuousChain(CalibrationChain& chain, CalibrationContext& ctx, do
 	bool lerp = false;
 	chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
 	chain.calibration.lockRelativePosition = chain.lockRelativePosition;
-	chain.calibration.ComputeIncremental(
+	const bool calUpdated = chain.calibration.ComputeIncremental(
 		lerp,
 		CalCtx.continuousCalibrationThreshold,
 		CalCtx.maxRelativeErrorThreshold,
 		CalCtx.ignoreOutliers
 	);
 
-	if (!chain.calibration.isValid()) {
+	if (!calUpdated || !chain.calibration.isValid()) {
 		return;
 	}
 
@@ -185,7 +183,6 @@ void StartContinuousChains() {
 void EndContinuousChains() {
 	for (auto& chain : CalChains) {
 		chain.continuousActive = false;
-		chain.relativePosCalibrated = false;
 	}
 	SyncCalCtxToPrimaryChain();
 	Metrics::WriteLogAnnotation("EndContinuousChains");

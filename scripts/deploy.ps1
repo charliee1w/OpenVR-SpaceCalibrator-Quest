@@ -13,11 +13,12 @@ $overlayDest = Join-Path $SteamRoot "01spacecalibrator"
 $driverRoot = Join-Path $SteamRoot "SteamVR\drivers\01spacecalibrator"
 $driverDest = Join-Path $driverRoot "bin\win64"
 
-foreach ($p in @(
+$required = @(
     (Join-Path $release "SpaceCalibrator.exe"),
     (Join-Path $driverSrc "driver_01spacecalibrator.dll"),
     $manifestSrc
-)) {
+)
+foreach ($p in $required) {
     if (-not (Test-Path $p)) {
         Write-Error "Missing build artifact: $p`nRun: cmake --build bin --config Release"
     }
@@ -31,6 +32,8 @@ Copy-Item (Join-Path $driverSrc "driver_01spacecalibrator.dll") (Join-Path $over
 Copy-Item $manifestSrc (Join-Path $overlayDest "driver.vrdrivermanifest") -Force
 Copy-Item (Join-Path $driverSrc "driver_01spacecalibrator.dll") (Join-Path $driverDest "driver_01spacecalibrator.dll") -Force
 Copy-Item $manifestSrc (Join-Path $driverRoot "driver.vrdrivermanifest") -Force
+
+& (Join-Path $PSScriptRoot "disable-spaceoverride-driver.ps1") -SteamRoot $SteamRoot
 
 Get-ChildItem $driverDest -Filter "*.dll.stale" -ErrorAction SilentlyContinue | Remove-Item -Force
 

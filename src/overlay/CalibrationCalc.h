@@ -116,6 +116,10 @@ public:
 		return m_samples.size();
 	}
 
+	const std::deque<Sample>& Samples() const {
+		return m_samples;
+	}
+
 	void ShiftSample() {
 		if (!m_samples.empty()) m_samples.pop_front();
 	}

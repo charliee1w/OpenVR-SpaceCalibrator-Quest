@@ -6,6 +6,7 @@
 #include "CalibrationCalc.h"
 #include "CalibrationChain.h"
 #include "GuardianDrift.h"
+
 #include "VRState.h"
 
 #include <string>
@@ -30,6 +31,16 @@ static protocol::DriverPoseShmem shmem;
 
 namespace {
 	CalibrationCalc calibration;
+
+	bool SafeDriverSend(const protocol::Request& req) {
+		try {
+			Driver.SendBlocking(req);
+			return true;
+		} catch (const std::exception& e) {
+			CalCtx.Log(std::string("Driver IPC failed: ") + e.what() + "\n");
+			return false;
+		}
+	}
 
 	inline vr::HmdVector3d_t quaternionRotateVector(const vr::HmdQuaternion_t& quat, const double(&vector)[3]) {
 		vr::HmdQuaternion_t vectorQuat = { 0.0, vector[0], vector[1] , vector[2] };
@@ -310,12 +321,15 @@ namespace {
 
 	void ApplyChainCalibrationImpl(const CalibrationChain& chain, bool lerp)
 	{
-	if (!chain.valid || chain.targetID < 0) {
+	if (!chain.valid) {
 		return;
 	}
 
-	auto vrTrans = VRTranslationVec(chain.calibratedTranslation);
-	auto vrRot = VRRotationQuat(chain.calibratedRotation);
+	CalibrationChain resolved = chain;
+	AssignChainTargets(resolved);
+
+	auto vrTrans = VRTranslationVec(resolved.calibratedTranslation);
+	auto vrRot = VRRotationQuat(resolved.calibratedRotation);
 
 	for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id) {
 		auto deviceClass = vr::VRSystem()->GetTrackedDeviceClass(id);
@@ -326,29 +340,45 @@ namespace {
 		char buffer[vr::k_unMaxPropertyStringSize] = {};
 		vr::ETrackedPropertyError err = vr::TrackedProp_Success;
 		vr::VRSystem()->GetStringTrackedDeviceProperty(id, vr::Prop_TrackingSystemName_String, buffer, sizeof(buffer), &err);
-		if (err != vr::TrackedProp_Success || std::string(buffer) != chain.targetTrackingSystem) {
+		if (err != vr::TrackedProp_Success || std::string(buffer) != resolved.targetTrackingSystem) {
 			continue;
 		}
 
 		protocol::Request req(protocol::RequestSetDeviceTransform);
-		req.setDeviceTransform = { id, true, vrTrans, vrRot, chain.calibratedScale };
+		req.setDeviceTransform = { id, true, vrTrans, vrRot, resolved.calibratedScale };
 		req.setDeviceTransform.lerp = lerp;
 		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous
-			&& (int)id == chain.targetID
+			&& (int)id == resolved.targetID
 			&& CalCtx.quashTargetInContinuous;
-		Driver.SendBlocking(req);
+		SafeDriverSend(req);
 	}
+	}
+
+	uint64_t GetTrackedDevicePresenceMask() {
+		uint64_t mask = 0;
+		for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id) {
+			if (vr::VRSystem()->GetTrackedDeviceClass(id) != vr::TrackedDeviceClass_Invalid) {
+				mask |= (1ULL << id);
+			}
+		}
+		return mask;
 	}
 
 	bool AssignTargets() {
 		auto state = VRState::Load();
-		
-		if (CalCtx.referenceID < 0) {
-			CalCtx.referenceID = state.FindDevice(CalCtx.referenceStandby.trackingSystem, CalCtx.referenceStandby.model, CalCtx.referenceStandby.serial);
+
+		const int resolvedReference = state.ResolveStandbyDevice(
+			CalCtx.referenceStandby, CalCtx.referenceTrackingSystem);
+		if (resolvedReference >= 0
+			&& (CalCtx.referenceID < 0 || !VRState::IsDeviceConnected(CalCtx.referenceID))) {
+			CalCtx.referenceID = resolvedReference;
 		}
 
-		if (CalCtx.targetID < 0) {
-			CalCtx.targetID = state.FindDevice(CalCtx.targetStandby.trackingSystem, CalCtx.targetStandby.model, CalCtx.targetStandby.serial);
+		const int resolvedTarget = state.ResolveStandbyDevice(
+			CalCtx.targetStandby, CalCtx.targetTrackingSystem);
+		if (resolvedTarget >= 0
+			&& (CalCtx.targetID < 0 || !VRState::IsDeviceConnected(CalCtx.targetID))) {
+			CalCtx.targetID = resolvedTarget;
 		}
 
 		for (int i = 0; i < CalCtx.MAX_CONTROLLERS; i++) {
@@ -416,20 +446,26 @@ void ResetAndDisableOffsets(uint32_t id)
 
 	protocol::Request req(protocol::RequestSetDeviceTransform);
 	req.setDeviceTransform = { id, false, zeroV, zeroQ, 1.0 };
-	Driver.SendBlocking(req);
+	SafeDriverSend(req);
 }
 
 static_assert(vr::k_unTrackedDeviceIndex_Hmd == 0, "HMD index expected to be 0");
 
 void ScanAndApplyProfile(CalibrationContext &ctx)
 {
+	AssignTargets();
+	SyncCalCtxToPrimaryChain();
+
 	std::unique_ptr<char[]> buffer_array(new char [vr::k_unMaxPropertyStringSize]);
 	char* buffer = buffer_array.get();
-	ctx.enabled = ctx.validProfile;
+	bool applyEnabled = ctx.validProfile;
+	bool hmdTrackingSystemOk = true;
 
 	protocol::Request setParamsReq(protocol::RequestSetAlignmentSpeedParams);
 	setParamsReq.setAlignmentSpeedParams = ctx.alignmentSpeedParams;
-	Driver.SendBlocking(setParamsReq);
+	if (!SafeDriverSend(setParamsReq)) {
+		ctx.Log("Warning: alignment params IPC failed; continuing device apply\n");
+	}
 
 	for (uint32_t id = 0; id < vr::k_unMaxTrackedDeviceCount; ++id)
 	{
@@ -446,7 +482,7 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 			continue;
 		}*/
 
-		if (!ctx.enabled)
+		if (!applyEnabled)
 		{
 			ResetAndDisableOffsets(id);
 			continue;
@@ -486,8 +522,7 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 
 			if (trackingSystem != ctx.referenceTrackingSystem)
 			{
-				// Currently using an HMD with a different tracking system than the calibration.
-				ctx.enabled = false;
+				hmdTrackingSystemOk = false;
 			}
 
 			ResetAndDisableOffsets(id);
@@ -529,11 +564,13 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 		};
 		req.setDeviceTransform.lerp = CalCtx.state == CalibrationState::Continuous;
 		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous
-			&& id == (uint32_t)chain.targetID
+			&& id == (uint32_t)CalCtx.targetID
 			&& CalCtx.quashTargetInContinuous;
 
-		Driver.SendBlocking(req);
+		SafeDriverSend(req);
 	}
+
+	ctx.enabled = applyEnabled && hmdTrackingSystemOk;
 
 	if (ctx.enabled && ctx.chaperone.valid && ctx.chaperone.autoApply)
 	{
@@ -549,11 +586,41 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 	}
 }
 
+namespace {
+	bool ShouldApplySavedProfile(const CalibrationContext& ctx) {
+		return ctx.validProfile && (
+			ctx.state == CalibrationState::None
+			|| ctx.state == CalibrationState::Continuous
+			|| ctx.state == CalibrationState::ContinuousStandby
+			|| ctx.state == CalibrationState::Editing
+		);
+	}
+
+	void MaybeScanAndApplySavedProfile(CalibrationContext& ctx, double time) {
+		if (!ShouldApplySavedProfile(ctx)) {
+			return;
+		}
+
+		static uint64_t lastPresenceMask = 0;
+		const uint64_t presenceMask = GetTrackedDevicePresenceMask();
+		const bool devicesChanged = presenceMask != lastPresenceMask;
+		lastPresenceMask = presenceMask;
+
+		const double scanInterval = (ctx.state == CalibrationState::Editing) ? 0.1 : 1.0;
+		if (!devicesChanged && (time - ctx.timeLastScan) < scanInterval) {
+			return;
+		}
+
+		ScanAndApplyProfile(ctx);
+		ctx.timeLastScan = time;
+	}
+}
+
 void StartCalibration() {
 	CalCtx.hasAppliedCalibrationResult = false;
 	AssignTargets();
 	CalCtx.state = CalibrationState::Begin;
-	CalCtx.wantedUpdateInterval = 0.0;
+	CalCtx.wantedUpdateInterval = 0.05;
 	CalCtx.messages.clear();
 	calibration.Clear();
 	Metrics::WriteLogAnnotation("StartCalibration");
@@ -571,6 +638,7 @@ void StartContinuousCalibration() {
 	}
 	StartCalibration();
 	CalCtx.state = CalibrationState::Continuous;
+	CalCtx.wantedUpdateInterval = 0.05;
 	CalCtx.enableStaticRecalibration = true;
 	calibration.enableStaticRecalibration = true;
 	calibration.ResetContinuousGuards();
@@ -586,13 +654,24 @@ void StartContinuousCalibration() {
 		CalCtx.Log("Collecting initial samples...");
 	}
 	StartContinuousChains();
+	if (CalCtx.validProfile) {
+		// Match upstream: apply hide-tracker (quash) immediately when cont cal starts,
+		// not only after the first incremental cal update.
+		ScanAndApplyProfile(CalCtx);
+	}
 	Metrics::WriteLogAnnotation("StartContinuousCalibration");
 }
 
 void EndContinuousCalibration() {
+	SyncPrimaryChainToCalCtx();
 	EndContinuousChains();
 	CalCtx.state = CalibrationState::None;
-	CalCtx.relativePosCalibrated = false;
+	CalCtx.wantedUpdateInterval = 1.0;
+	AssignTargets();
+	if (CalCtx.validProfile) {
+		ScanAndApplyProfile(CalCtx);
+	}
+	SyncCalCtxToPrimaryChain();
 	SaveProfile(CalCtx);
 	Metrics::WriteLogAnnotation("EndContinuousCalibration");
 }
@@ -602,6 +681,7 @@ void CalibrationTick(double time)
 	if (!vr::VRSystem())
 		return;
 
+	try {
 	auto &ctx = CalCtx;
 	if ((time - ctx.timeLastTick) < 0.05)
 		return;
@@ -617,6 +697,12 @@ void CalibrationTick(double time)
 	}
 
 	ctx.timeLastTick = time;
+
+	// Apply saved cal to newly connected trackers before tracking-quality gates.
+	// contcal13 stopped calling ScanAndApplyProfile during continuous cal, which broke
+	// powering trackers on after setup (upstream re-applied every tick).
+	MaybeScanAndApplySavedProfile(ctx, time);
+
 	shmem.ReadNewPoses([&](const protocol::DriverPoseShmem::AugmentedPose& augmented_pose) {
 		if (augmented_pose.deviceId >= 0 && augmented_pose.deviceId < vr::k_unMaxTrackedDeviceCount) {
 			ctx.devicePoses[augmented_pose.deviceId] = augmented_pose.pose;
@@ -666,16 +752,6 @@ void CalibrationTick(double time)
 		}
 	}
 
-	if (ctx.state == CalibrationState::None || ctx.state == CalibrationState::ContinuousStandby
-		|| (ctx.state == CalibrationState::Continuous && !calibration.isValid()))
-	{
-		if ((time - ctx.timeLastScan) >= 1.0)
-		{
-			ScanAndApplyProfile(ctx);
-			ctx.timeLastScan = time;
-		}
-	}
-
 	if (ctx.state == CalibrationState::ContinuousStandby) {
 		if (AssignTargets()) {
 			StartContinuousCalibration();
@@ -695,12 +771,6 @@ void CalibrationTick(double time)
 	if (ctx.state == CalibrationState::Editing)
 	{
 		ctx.wantedUpdateInterval = 0.1;
-
-		if ((time - ctx.timeLastScan) >= 0.1)
-		{
-			ScanAndApplyProfile(ctx);
-			ctx.timeLastScan = time;
-		}
 		return;
 	}
 
@@ -756,7 +826,7 @@ void CalibrationTick(double time)
 		if (ok) {
 			//ResetAndDisableOffsets(ctx.targetID);
 			ctx.state = CalibrationState::Rotation;
-			ctx.wantedUpdateInterval = 0.0;
+			ctx.wantedUpdateInterval = 0.05;
 
 			CalCtx.Log("Starting calibration...\n");
 			return;
@@ -833,34 +903,50 @@ void CalibrationTick(double time)
 	QueryPerformanceCounter(&start_time);
 		
 	bool lerp = false;
+	bool calUpdated = false;
 
 	if (CalCtx.state == CalibrationState::Continuous) {
+		CalCtx.wantedUpdateInterval = 0.05;
 		CalCtx.messages.clear();
 		calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
 		calibration.lockRelativePosition = CalCtx.lockRelativePosition;
-		calibration.ComputeIncremental(lerp, CalCtx.continuousCalibrationThreshold, CalCtx.maxRelativeErrorThreshold, CalCtx.ignoreOutliers);
+		calUpdated = calibration.ComputeIncremental(
+			lerp,
+			CalCtx.continuousCalibrationThreshold,
+			CalCtx.maxRelativeErrorThreshold,
+			CalCtx.ignoreOutliers
+		);
 	}
 	else {
 		calibration.enableStaticRecalibration = false;
 		calibration.ComputeOneshot(CalCtx.ignoreOutliers);
+		calUpdated = calibration.isValid();
 	}
 
-	if (calibration.isValid()) {
+	if (CalCtx.state == CalibrationState::Continuous) {
+		if (calUpdated && calibration.isValid()) {
+			ctx.calibratedRotation = calibration.EulerRotation();
+			ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0;
+			ctx.refToTargetPose = calibration.RelativeTransformation();
+			ctx.relativePosCalibrated = calibration.isRelativeTransformationCalibrated();
+			ctx.validProfile = true;
+			SyncCalCtxToPrimaryChain();
+			ApplyChainCalibration(CalChains[0], lerp);
+			MaybeSaveProfile(ctx, time);
+			CalCtx.hasAppliedCalibrationResult = true;
+		}
+	}
+	else if (calibration.isValid()) {
 		ctx.calibratedRotation = calibration.EulerRotation();
-		ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0; // convert to cm units for profile storage
+		ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0;
 		ctx.refToTargetPose = calibration.RelativeTransformation();
 		ctx.relativePosCalibrated = calibration.isRelativeTransformationCalibrated();
-
-		auto vrTrans = VRTranslationVec(ctx.calibratedTranslation);
-		auto vrRot = VRRotationQuat(Eigen::Quaterniond(calibration.Transformation().rotation()));
-
 		ctx.validProfile = true;
 		SaveProfile(ctx);
 
 		ScanAndApplyProfile(ctx);
 
 		CalCtx.hasAppliedCalibrationResult = true;
-
 		CalCtx.Log("Finished calibration, profile saved\n");
 	} else {
 		CalCtx.Log("Calibration failed.\n");
@@ -873,7 +959,9 @@ void CalibrationTick(double time)
 	double duration = (end_time.QuadPart - start_time.QuadPart) / (double)freq.QuadPart;
 	Metrics::computationTime.Push(duration * 1000.0);
 
-	Metrics::WriteLogEntry();
+	if (CalCtx.state != CalibrationState::Continuous) {
+		Metrics::WriteLogEntry();
+	}
 		
 	if (CalCtx.state != CalibrationState::Continuous) {
 		ctx.state = CalibrationState::None;
@@ -921,6 +1009,9 @@ void CalibrationTick(double time)
 			}
 		}
 	}
+	} catch (const std::exception& e) {
+		CalCtx.Log(std::string("Calibration tick error: ") + e.what() + "\n");
+	}
 }
 
 void LoadChaperoneBounds()
@@ -948,5 +1039,5 @@ void ApplyChaperoneBounds()
 
 void DebugApplyRandomOffset() {
 	protocol::Request req(protocol::RequestDebugOffset);
-	Driver.SendBlocking(req);
+	SafeDriverSend(req);
 }
