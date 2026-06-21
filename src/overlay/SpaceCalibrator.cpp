@@ -201,8 +201,6 @@ void TryCreateVROverlay() {
 	std::string iconPath = cwd;
 	iconPath += "\\icon.png";
 	vr::VROverlay()->SetOverlayFromFile(overlayThumbnailHandle, iconPath.c_str());
-	// Keep compositor from compositing this layer until the SteamVR dashboard is open.
-	vr::VROverlay()->HideOverlay(overlayMainHandle);
 }
 
 void ActivateMultipleDrivers()
@@ -430,18 +428,7 @@ void RunLoop() {
 			}
 		}
 
-		// vrcompositor only composites us when the dashboard is open — never from desktop mirror.
-		static bool overlayShown = false;
-		if (overlayMainHandle && vr::VROverlay()) {
-			if (dashboardVisible && !overlayShown) {
-				vr::VROverlay()->ShowOverlay(overlayMainHandle);
-				overlayShown = true;
-			} else if (!dashboardVisible && overlayShown) {
-				vr::VROverlay()->HideOverlay(overlayMainHandle);
-				overlayShown = false;
-			}
-		}
-
+		// Dashboard only — no desktop mirror. Cal tick stays at wantedUpdateInterval.
 		const bool shouldRender = dashboardVisible;
 
 		if (shouldRender)
@@ -501,40 +488,27 @@ void RunLoop() {
 
 			glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-			// Cap compositor texture uploads — SetOverlayTexture feeds vrcompositor directly.
-			static double lastOverlayTextureUpload = 0;
-			const double nowUpload = glfwGetTime();
-			const double overlayUploadInterval = 1.0 / 30.0;
-			if ((nowUpload - lastOverlayTextureUpload) >= overlayUploadInterval)
-			{
-				lastOverlayTextureUpload = nowUpload;
-
-				vr::Texture_t vrTex = {
-					.handle = (void*)
+			vr::Texture_t vrTex = {
+				.handle = (void*)
 #if defined _WIN64 || defined _LP64
 				(uint64_t)
 #endif
-						fboTextureHandle,
-					.eType = vr::TextureType_OpenGL,
-					.eColorSpace = vr::ColorSpace_Auto,
-				};
+					fboTextureHandle,
+				.eType = vr::TextureType_OpenGL,
+				.eColorSpace = vr::ColorSpace_Auto,
+			};
 
-				vr::HmdVector2_t mouseScale = { (float) fboTextureWidth, (float) fboTextureHeight };
+			vr::HmdVector2_t mouseScale = { (float) fboTextureWidth, (float) fboTextureHeight };
 
-				vr::VROverlay()->SetOverlayTexture(overlayMainHandle, &vrTex);
-				vr::VROverlay()->SetOverlayMouseScale(overlayMainHandle, &mouseScale);
-			}
+			vr::VROverlay()->SetOverlayTexture(overlayMainHandle, &vrTex);
+			vr::VROverlay()->SetOverlayMouseScale(overlayMainHandle, &mouseScale);
 		}
 
-		const double dashboardInterval = 1.0 / 30.0;
+		const double dashboardInterval = 1.0 / 90.0;
 		double waitEventsTimeout = std::max(CalCtx.wantedUpdateInterval, dashboardInterval);
 
 		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
 			waitEventsTimeout = dashboardInterval;
-
-		if (!shouldRender) {
-			waitEventsTimeout = std::max(waitEventsTimeout, 1.0);
-		}
 
 		if (immediateRedraw) {
 			immediateRedraw = false;
