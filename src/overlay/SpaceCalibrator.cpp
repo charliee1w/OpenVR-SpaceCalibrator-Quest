@@ -341,7 +341,6 @@ void RunLoop() {
 		bool dashboardVisible = false;
 		int width, height;
 		glfwGetFramebufferSize(glfwWindow, &width, &height);
-		const bool windowVisible = (width > 0 && height > 0);
 
 		if (overlayMainHandle && vr::VROverlay())
 		{
@@ -426,8 +425,13 @@ void RunLoop() {
 				}
 			}
 		}
+
+		const bool iconified = glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED) != 0;
+		// Iconified windows still report a framebuffer size; only mirror to desktop when restored.
+		const bool windowVisible = (width > 0 && height > 0 && !iconified);
+		const bool shouldRender = dashboardVisible || windowVisible;
 		
-		if (windowVisible || dashboardVisible)
+		if (shouldRender)
 		{
 			auto &io = ImGui::GetIO();
 			
@@ -484,7 +488,7 @@ void RunLoop() {
 
 			glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-			if (width && height)
+			if (windowVisible)
 			{
 				glBindFramebuffer(GL_READ_FRAMEBUFFER, fboHandle);
 				glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -517,14 +521,14 @@ void RunLoop() {
 			waitEventsTimeout = dashboardInterval;
 
 		if (immediateRedraw) {
-			waitEventsTimeout = 0;
 			immediateRedraw = false;
+			waitEventsTimeout = std::min(waitEventsTimeout, dashboardInterval);
 		}
 
 		glfwWaitEventsTimeout(waitEventsTimeout);
 
-		// If we're minimized rendering won't limit our frame rate so we need to do it ourselves.
-		if (glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED))
+		// Swap interval is ignored while iconified; cap render rate ourselves.
+		if (shouldRender && iconified)
 		{
 			double targetFrameTime = 1 / MINIMIZED_MAX_FPS;
 			double waitTime = targetFrameTime - (glfwGetTime() - lastFrameStartTime);
