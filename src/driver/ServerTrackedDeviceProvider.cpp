@@ -211,10 +211,10 @@ void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTr
 }
 
 namespace {
-	// Passive devices (HMD reference, etc.) only need poses at cal tick rate — not 90Hz on head move.
-	constexpr double kPassivePoseStreamIntervalSec = 0.05;
+	// Calibration reads poses at 20Hz; shmem writes don't belong on the per-frame pose hot path.
+	constexpr double kCalPoseStreamIntervalSec = 0.05;
 
-	bool ShouldStreamPassivePose(uint32_t openVRID) {
+	bool ShouldStreamPoseForCal(uint32_t openVRID) {
 		static LARGE_INTEGER lastWrite[vr::k_unMaxTrackedDeviceCount] = {};
 		static LARGE_INTEGER freq = {};
 		if (freq.QuadPart == 0) {
@@ -228,7 +228,7 @@ namespace {
 		LARGE_INTEGER now;
 		QueryPerformanceCounter(&now);
 		const double elapsed = (double)(now.QuadPart - lastWrite[openVRID].QuadPart) / (double)freq.QuadPart;
-		if (lastWrite[openVRID].QuadPart != 0 && elapsed < kPassivePoseStreamIntervalSec) {
+		if (lastWrite[openVRID].QuadPart != 0 && elapsed < kCalPoseStreamIntervalSec) {
 			return false;
 		}
 		lastWrite[openVRID] = now;
@@ -239,10 +239,8 @@ namespace {
 bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr::DriverPose_t &pose)
 {
 	auto& tf = transforms[openVRID];
+	// HMD + every untouched device: zero work — pose must reach SteamVR instantly on head move.
 	if (!tf.enabled && !tf.quash) {
-		if (ShouldStreamPassivePose(openVRID)) {
-			shmem.SetPose(openVRID, pose);
-		}
 		return true;
 	}
 
@@ -256,7 +254,9 @@ bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 		pose.vecPosition[2] = dbgPos(2);
 	}
 
-	shmem.SetPose(openVRID, pose);
+	if (ShouldStreamPoseForCal(openVRID)) {
+		shmem.SetPose(openVRID, pose);
+	}
 
 	if (tf.quash) {
 		pose.vecPosition[0] = -pose.vecWorldFromDriverTranslation[0];

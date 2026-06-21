@@ -140,6 +140,54 @@ namespace {
 		return ds;
 	}
 
+	vr::HmdQuaternion_t Matrix34ToQuat(const vr::HmdMatrix34_t& m) {
+		Eigen::Matrix3d rot;
+		for (int i = 0; i < 3; i++) {
+			for (int j = 0; j < 3; j++) {
+				rot(i, j) = m.m[i][j];
+			}
+		}
+		const Eigen::Quaterniond q(rot);
+		return { q.w(), q.x(), q.y(), q.z() };
+	}
+
+	void TrackedPoseToDriverPose(const vr::TrackedDevicePose_t& tracked, vr::DriverPose_t& driver) {
+		memset(&driver, 0, sizeof(driver));
+		driver.poseIsValid = tracked.bPoseIsValid;
+		driver.deviceIsConnected = tracked.bDeviceIsConnected;
+		driver.result = tracked.eTrackingResult;
+		driver.qWorldFromDriverRotation = { 1, 0, 0, 0 };
+		driver.qDriverFromHeadRotation = { 1, 0, 0, 0 };
+		driver.vecPosition[0] = tracked.mDeviceToAbsoluteTracking.m[0][3];
+		driver.vecPosition[1] = tracked.mDeviceToAbsoluteTracking.m[1][3];
+		driver.vecPosition[2] = tracked.mDeviceToAbsoluteTracking.m[2][3];
+		driver.qRotation = Matrix34ToQuat(tracked.mDeviceToAbsoluteTracking);
+		driver.vecVelocity[0] = tracked.vVelocity.v[0];
+		driver.vecVelocity[1] = tracked.vVelocity.v[1];
+		driver.vecVelocity[2] = tracked.vVelocity.v[2];
+		driver.vecAngularVelocity[0] = tracked.vAngularVelocity.v[0];
+		driver.vecAngularVelocity[1] = tracked.vAngularVelocity.v[1];
+		driver.vecAngularVelocity[2] = tracked.vAngularVelocity.v[2];
+	}
+
+	void RefreshReferencePoseFromVRSystem(CalibrationContext& ctx) {
+		if (!vr::VRSystem()) {
+			return;
+		}
+
+		const int refId = ctx.referenceID >= 0 ? ctx.referenceID : (int)vr::k_unTrackedDeviceIndex_Hmd;
+		if (refId < 0 || refId >= vr::k_unMaxTrackedDeviceCount) {
+			return;
+		}
+
+		vr::TrackedDevicePose_t trackedPoses[vr::k_unMaxTrackedDeviceCount];
+		vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
+			vr::TrackingUniverseStanding, 0.0f, trackedPoses, vr::k_unMaxTrackedDeviceCount);
+
+		TrackedPoseToDriverPose(trackedPoses[refId], ctx.devicePoses[refId]);
+		QueryPerformanceCounter(&ctx.devicePoseSampleTime[refId]);
+	}
+
 	double PoseSampleAgeSeconds(const CalibrationContext& ctx, int deviceId) {
 		LARGE_INTEGER now, freq;
 		QueryPerformanceCounter(&now);
@@ -699,6 +747,7 @@ void CalibrationTick(double time)
 			ctx.devicePoseSampleTime[augmented_pose.deviceId] = augmented_pose.sample_time;
 		}
 	});
+	RefreshReferencePoseFromVRSystem(ctx);
 
 	const int trackingDeviceId = (ctx.referenceID >= 0) ? ctx.referenceID : vr::k_unTrackedDeviceIndex_Hmd;
 	const auto& trackingPose = ctx.devicePoses[trackingDeviceId];
