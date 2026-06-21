@@ -87,18 +87,35 @@ void RefreshDevicePosesForCalibration(CalibrationContext& ctx, protocol::DriverP
 		}
 	}
 
-	if (!vr::VRSystem()) {
-		return;
+	bool refPoseReady = false;
+	if (ctx.slamReference && refId >= 0 && refId < vr::k_unMaxTrackedDeviceCount) {
+		vr::DriverPose_t shmemRef = {};
+		LARGE_INTEGER shmemRefTime = {};
+		if (shmem.GetPose(refId, shmemRef, &shmemRefTime) && CalPoseIsTrackingOk(shmemRef)) {
+			// Hook-captured oculus pose retains VD fields (poseTimeOffset, willDriftInYaw, head model).
+			ctx.devicePoses[refId] = shmemRef;
+			ctx.devicePoseSampleTime[refId] = shmemRefTime;
+			SetPoseSource(refId, CalPoseSource::DriverShmem);
+			refPoseReady = true;
+		}
 	}
 
-	vr::TrackedDevicePose_t trackedPoses[vr::k_unMaxTrackedDeviceCount];
-	vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
-		vr::TrackingUniverseStanding, 0.0f, trackedPoses, vr::k_unMaxTrackedDeviceCount);
+	vr::TrackedDevicePose_t trackedPoses[vr::k_unMaxTrackedDeviceCount] = {};
+	const bool haveVRSystem = vr::VRSystem() != nullptr;
+	if (haveVRSystem) {
+		vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
+			vr::TrackingUniverseStanding, 0.0f, trackedPoses, vr::k_unMaxTrackedDeviceCount);
+	}
 
-	if (refId >= 0 && refId < vr::k_unMaxTrackedDeviceCount) {
+	if (!refPoseReady && haveVRSystem && refId >= 0 && refId < vr::k_unMaxTrackedDeviceCount) {
 		TrackedPoseToDriverPose(trackedPoses[refId], ctx.devicePoses[refId]);
 		QueryPerformanceCounter(&ctx.devicePoseSampleTime[refId]);
 		SetPoseSource(refId, CalPoseSource::VRSystemReference);
+		refPoseReady = CalPoseIsTrackingOk(ctx.devicePoses[refId]);
+	}
+
+	if (!haveVRSystem) {
+		return;
 	}
 
 	if (targetId < 0 || targetId >= vr::k_unMaxTrackedDeviceCount || targetId == refId) {
@@ -130,8 +147,7 @@ void RefreshDevicePosesForCalibration(CalibrationContext& ctx, protocol::DriverP
 #endif
 	}
 
-	// VRSystem ref is re-polled every tick; driver target keeps its hook timestamp.
-	// Without this, pose-time skew rejects every sample after ~50ms.
+	// VRSystem ref lacks hook timestamps; align to target shmem time to avoid skew rejection.
 	if (refId >= 0 && refId < vr::k_unMaxTrackedDeviceCount
 		&& targetId >= 0 && targetId < vr::k_unMaxTrackedDeviceCount
 		&& GetLastCalPoseSource(refId) == CalPoseSource::VRSystemReference

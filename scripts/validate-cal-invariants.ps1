@@ -26,9 +26,9 @@ Add-Check "active transform blocks VRSystem target fallback" `
     ($calPosesText -match 'if \(!ctx\.validProfile \|\| !ctx\.relativePosCalibrated\)') `
     "CalibrationPoses.cpp must gate VRSystem target fallback until profile+relative pose are ready"
 
-Add-Check "reference always VRSystem" `
-    ($calPosesText -match 'VRSystemReference') `
-    "reference pose must be tagged VRSystemReference"
+Add-Check "SLAM reference prefers driver shmem" `
+    ($calPosesText -match 'ctx\.slamReference' -and $calPosesText -match 'VRSystemReference') `
+    "Quest reference must use hook shmem when available, VRSystem as fallback"
 
 Add-Check "cal tick uses RefreshDevicePosesForCalibration" `
     ($calCppText -match 'RefreshDevicePosesForCalibration') `

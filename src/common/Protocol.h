@@ -343,10 +343,19 @@ namespace protocol
 			});
 
 			if (index >= 0 && index < vr::k_unMaxTrackedDeviceCount) {
-				pose = lastPose[index].pose;
-				if (pSampleTime) *pSampleTime = lastPose[index].sample_time;
+				const AugmentedPose& cached = lastPose[index];
+				if (cached.sample_time.QuadPart == 0
+					|| !cached.pose.poseIsValid
+					|| cached.pose.result != vr::ETrackingResult::TrackingResult_Running_OK) {
+					return false;
+				}
+				pose = cached.pose;
+				if (pSampleTime) {
+					*pSampleTime = cached.sample_time;
+				}
 				return true;
 			}
+			return false;
 		}
 
 		void SetPose(int index, const vr::DriverPose_t& pose) {
