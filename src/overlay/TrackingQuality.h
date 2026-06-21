@@ -35,7 +35,8 @@ inline TrackingQuality EvaluateDeviceTracking(
 	DeviceTrackingState& state,
 	bool slamDevice,
 	double maxPoseTimeOffset,
-	int frozenFrameThreshold)
+	int frozenFrameThreshold,
+	bool detectFrozen = true)
 {
 	const double pos[3] = { pose.vecPosition[0], pose.vecPosition[1], pose.vecPosition[2] };
 
@@ -56,10 +57,12 @@ inline TrackingQuality EvaluateDeviceTracking(
 
 	state.lastPoseTimeOffset = pose.poseTimeOffset;
 
-	const bool lowMotion = Vec3Norm(pose.vecVelocity) < 1e-3 && Vec3Norm(pose.vecAngularVelocity) < 1e-3;
-	if (state.unchangedFrames >= frozenFrameThreshold && lowMotion) {
-		state.quality = TrackingQuality::Frozen;
-		return state.quality;
+	if (detectFrozen) {
+		const bool lowMotion = Vec3Norm(pose.vecVelocity) < 1e-3 && Vec3Norm(pose.vecAngularVelocity) < 1e-3;
+		if (state.unchangedFrames >= frozenFrameThreshold && lowMotion) {
+			state.quality = TrackingQuality::Frozen;
+			return state.quality;
+		}
 	}
 
 	if (slamDevice && (pose.willDriftInYaw || std::abs(pose.poseTimeOffset) > maxPoseTimeOffset)) {

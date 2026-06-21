@@ -4,6 +4,7 @@
 #include "Configuration.h"
 #include "EmbeddedFiles.h"
 #include "UserInterface.h"
+#include "ui_theme.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -128,10 +129,9 @@ void CreateGLFWWindow()
 	glfwSwapInterval(1);
 	gl3wInit();
 
-	// Hide the desktop mirror window — UI is via SteamVR dashboard only.
-	glfwIconifyWindow(glfwWindow);
+	// Keep a normal desktop window as fallback when the SteamVR dashboard is stuck or unavailable.
 	HWND windowHwmd = glfwGetWin32Window(glfwWindow);
-	ShowWindow(windowHwmd, SW_HIDE);
+	ShowWindow(windowHwmd, SW_SHOW);
 	EnableDarkModeTopBar(windowHwmd);
 
 	// Load icon and set it in the window
@@ -153,12 +153,17 @@ void CreateGLFWWindow()
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 	io.IniFilename = nullptr;
+	// Log recoverable UI mistakes to debug output; don't show the red dev tooltip in VR.
+	io.ConfigErrorRecoveryEnableTooltip = false;
+	io.ConfigErrorRecoveryEnableAssert = false;
+	io.ConfigErrorRecoveryEnableDebugLog = true;
 	io.Fonts->AddFontFromMemoryCompressedTTF(DroidSans_compressed_data, DroidSans_compressed_size, 24.0f);
 
 	ImGui_ImplGlfw_InitForOpenGL(glfwWindow, true);
 	ImGui_ImplOpenGL3_Init("#version 330");
 
 	ImGui::StyleColorsDark();
+	SpaceCalUI::ApplyTheme();
 
 	glGenTextures(1, &fboTextureHandle);
 	glBindTexture(GL_TEXTURE_2D, fboTextureHandle);
@@ -343,7 +348,7 @@ void RunLoop() {
 		bool dashboardVisible = false;
 		int width, height;
 		glfwGetFramebufferSize(glfwWindow, &width, &height);
-		const bool windowVisible = (width > 0 && height > 0);
+		const bool windowVisible = width > 0 && height > 0;
 
 		if (overlayMainHandle && vr::VROverlay())
 		{

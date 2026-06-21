@@ -50,6 +50,7 @@ struct CalibrationContext
 	bool enabled = false;
 	bool validProfile = false;
 	bool clearOnLog = false;
+	bool warnedTargetPoseMissingFromShmem = false;
 	bool quashTargetInContinuous = false;
 	double timeLastTick = 0, timeLastScan = 0, timeLastAssign = 0, timeLastPeriodicLog = 0, timeLastProfileSave = 0;
 	bool ignoreOutliers = false;
@@ -172,6 +173,7 @@ struct CalibrationContext
 		guardianDriftYawThresholdRad = 5.0f * static_cast<float>(EIGEN_PI / 180.0);
 		guardianDriftConfirmChecks = 3;
 		guardianDriftCooldownFrames = 60;
+		autoRecalOnGuardianDrift = false;
 		calibrationSpeed = SLOW;
 		alignmentSpeedParams.align_rot_speed_scale = 0.45;
 	}

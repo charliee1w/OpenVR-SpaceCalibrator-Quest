@@ -210,40 +210,8 @@ void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTr
 	tf.quash = newTransform.quash;
 }
 
-namespace {
-	// Calibration reads poses at 20Hz; shmem writes don't belong on the per-frame pose hot path.
-	constexpr double kCalPoseStreamIntervalSec = 0.05;
-
-	bool ShouldStreamPoseForCal(uint32_t openVRID) {
-		static LARGE_INTEGER lastWrite[vr::k_unMaxTrackedDeviceCount] = {};
-		static LARGE_INTEGER freq = {};
-		if (freq.QuadPart == 0) {
-			QueryPerformanceFrequency(&freq);
-		}
-
-		if (openVRID >= vr::k_unMaxTrackedDeviceCount) {
-			return false;
-		}
-
-		LARGE_INTEGER now;
-		QueryPerformanceCounter(&now);
-		const double elapsed = (double)(now.QuadPart - lastWrite[openVRID].QuadPart) / (double)freq.QuadPart;
-		if (lastWrite[openVRID].QuadPart != 0 && elapsed < kCalPoseStreamIntervalSec) {
-			return false;
-		}
-		lastWrite[openVRID] = now;
-		return true;
-	}
-}
-
 bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr::DriverPose_t &pose)
 {
-	auto& tf = transforms[openVRID];
-	// HMD + every untouched device: zero work — pose must reach SteamVR instantly on head move.
-	if (!tf.enabled && !tf.quash) {
-		return true;
-	}
-
 	// Apply debug pose before anything else
 	if (openVRID > 0) {
 		auto dbgPos = convert(pose.vecPosition) + debugTransform;
@@ -254,9 +222,10 @@ bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 		pose.vecPosition[2] = dbgPos(2);
 	}
 
-	if (ShouldStreamPoseForCal(openVRID)) {
-		shmem.SetPose(openVRID, pose);
-	}
+	// INVARIANT: shmem pose is always pre-transform (captured before quash/enabled offset below).
+	shmem.SetPose(openVRID, pose);
+
+	auto& tf = transforms[openVRID];
 
 	if (tf.quash) {
 		pose.vecPosition[0] = -pose.vecWorldFromDriverTranslation[0];

@@ -11,4 +11,10 @@ namespace ImGui
 	void EndGroupPanel();
 
 	inline float GetWindowContentRegionWidth() { return ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x; }
+
+	void StatusBadge(const char* text, ImU32 bgColor);
+	void MetricCard(const char* id, const char* label, const char* value, const char* unit, ImVec4 accent);
+	bool LabeledSliderFloat(const char* label, float* v, float min, float max, const char* fmt, const char* tooltip = nullptr, ImGuiSliderFlags flags = 0);
+	void SectionHeading(const char* title, const char* subtitle = nullptr);
+	void HintText(const char* text);
 }

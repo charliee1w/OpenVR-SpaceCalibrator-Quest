@@ -90,8 +90,13 @@ bool HandleGuardianDrift(CalibrationContext& ctx, GuardianDriftState& state, dou
 
 	if (state.lastSnapshot.valid && live.universeId != 0 && state.lastSnapshot.universeId != 0
 		&& live.universeId != state.lastSnapshot.universeId) {
-		driftDetected = true;
-		driftReason = "tracking universe changed";
+		state.pendingUniverseChecks++;
+		if (state.pendingUniverseChecks >= ctx.guardianDriftConfirmChecks) {
+			driftDetected = true;
+			driftReason = "tracking universe changed";
+		}
+	} else {
+		state.pendingUniverseChecks = 0;
 	}
 
 	const double transDrift = StandingCenterTranslationDriftM(ctx.chaperone.standingCenter, live.standingCenter);
@@ -135,7 +140,7 @@ bool HandleGuardianDrift(CalibrationContext& ctx, GuardianDriftState& state, dou
 		ctx.Log("Updated profile chaperone from live guardian\n");
 	}
 
-	primaryCalc.Clear();
+	// Keep accumulated samples; only reset spike/frozen guards so cont cal can recover.
 	primaryCalc.ResetContinuousGuards();
 	state.driftCooldownFrames = ctx.guardianDriftCooldownFrames;
 	state.lastSnapshot = live;

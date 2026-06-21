@@ -24,6 +24,8 @@ foreach ($p in $required) {
     }
 }
 
+& (Join-Path $PSScriptRoot "validate-cal-invariants.ps1")
+
 New-Item -ItemType Directory -Force -Path (Join-Path $overlayDest "bin\win64") | Out-Null
 New-Item -ItemType Directory -Force -Path $driverDest | Out-Null
 

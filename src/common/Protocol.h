@@ -201,6 +201,7 @@ namespace protocol
 
 	class DriverPoseShmem {
 	public:
+		// pose is always the raw pre-transform tracking sample from the driver hook.
 		struct AugmentedPose {
 			LARGE_INTEGER sample_time;
 			int deviceId;
