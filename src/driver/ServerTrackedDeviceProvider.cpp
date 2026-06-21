@@ -210,11 +210,39 @@ void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTr
 	tf.quash = newTransform.quash;
 }
 
+namespace {
+	// Passive devices (HMD reference, etc.) only need poses at cal tick rate — not 90Hz on head move.
+	constexpr double kPassivePoseStreamIntervalSec = 0.05;
+
+	bool ShouldStreamPassivePose(uint32_t openVRID) {
+		static LARGE_INTEGER lastWrite[vr::k_unMaxTrackedDeviceCount] = {};
+		static LARGE_INTEGER freq = {};
+		if (freq.QuadPart == 0) {
+			QueryPerformanceFrequency(&freq);
+		}
+
+		if (openVRID >= vr::k_unMaxTrackedDeviceCount) {
+			return false;
+		}
+
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		const double elapsed = (double)(now.QuadPart - lastWrite[openVRID].QuadPart) / (double)freq.QuadPart;
+		if (lastWrite[openVRID].QuadPart != 0 && elapsed < kPassivePoseStreamIntervalSec) {
+			return false;
+		}
+		lastWrite[openVRID] = now;
+		return true;
+	}
+}
+
 bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr::DriverPose_t &pose)
 {
 	auto& tf = transforms[openVRID];
-	// Pose hook runs on every device every frame; skip work for devices we never touch.
-	if (openVRID != 0 && !tf.enabled && !tf.quash) {
+	if (!tf.enabled && !tf.quash) {
+		if (ShouldStreamPassivePose(openVRID)) {
+			shmem.SetPose(openVRID, pose);
+		}
 		return true;
 	}
 
