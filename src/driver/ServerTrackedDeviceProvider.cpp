@@ -187,11 +187,13 @@ inline vr::HmdVector3d_t quaternionRotateVector(const vr::HmdQuaternion_t& quat,
 void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTransform& newTransform)
 {
 	auto &tf = transforms[newTransform.openVRID];
+	const bool wasEnabled = tf.enabled;
 	tf.enabled = newTransform.enabled;
+	const bool snapLerp = !newTransform.lerp || (newTransform.enabled && !wasEnabled);
 
 	if (newTransform.updateTranslation) {
 		tf.targetTransform.translation = convert(newTransform.translation);
-		if (!newTransform.lerp) {
+		if (snapLerp) {
 			tf.transform.translation = tf.targetTransform.translation;
 		}
 	}
@@ -199,7 +201,7 @@ void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTr
 	if (newTransform.updateRotation) {
 		tf.targetTransform.rotation = convert(newTransform.rotation);
 
-		if (!newTransform.lerp) {
+		if (snapLerp) {
 			tf.transform.rotation = tf.targetTransform.rotation;
 		}
 	}

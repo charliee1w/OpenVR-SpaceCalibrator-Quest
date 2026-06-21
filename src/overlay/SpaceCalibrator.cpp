@@ -682,7 +682,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		CreateGLFWWindow();
 		InitCalibrator();
 		LoadProfile(CalCtx);
-		InitGoreSetup(CalCtx);
 		RunLoop();
 
 		vr::VR_Shutdown();

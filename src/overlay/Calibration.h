@@ -66,6 +66,7 @@ struct CalibrationContext
 	Eigen::Vector3d continuousCalibrationOffset;
 
 	static constexpr size_t ContinuousSampleCount = 40;
+	static constexpr size_t BootstrapSampleCount = 12;
 	float continuousSpikeThresholdM = 0.06f;
 	int continuousFrozenFrameThreshold = 6;
 	bool pauseOnReferenceJitter = true;
@@ -213,12 +214,19 @@ struct CalibrationContext
 		enabled = false;
 		validProfile = false;
 		refToTargetPose = Eigen::AffineCompact3d::Identity();
-		relativePosCalibrated = true;
+		relativePosCalibrated = false;
+	}
+
+	inline bool CanApplyCalibrationTransform() const {
+		return !lockRelativePosition || relativePosCalibrated;
 	}
 
 	size_t SampleCount()
 	{
 		if (state == CalibrationState::Continuous || state == CalibrationState::ContinuousStandby) {
+			if (lockRelativePosition && !relativePosCalibrated) {
+				return BootstrapSampleCount;
+			}
 			return ContinuousSampleCount;
 		}
 

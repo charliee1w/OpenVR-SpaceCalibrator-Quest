@@ -21,7 +21,11 @@ void InitGoreSetup(CalibrationContext& ctx) {
 	const StandbyDevice savedRefStandby = ctx.referenceStandby;
 	const StandbyDevice savedTgtStandby = ctx.targetStandby;
 
-	ctx.ApplyQuestProDefaults();
+	if (!hadSavedCal) {
+		ctx.ApplyQuestProDefaults();
+	} else {
+		ctx.ApplySlamReferencePreset();
+	}
 
 	if (hadSavedCal) {
 		ctx.calibratedRotation = savedRot;
@@ -45,7 +49,9 @@ void InitGoreSetup(CalibrationContext& ctx) {
 	chain.lockRelativePosition = ctx.lockRelativePosition;
 	chain.slamReference = ctx.slamReference;
 	chain.name = "Quest Pro -> Lighthouse FBT";
-	chain.autostartContinuous = true;
+	if (!hadSavedCal) {
+		chain.autostartContinuous = true;
+	}
 
 	SyncCalCtxToPrimaryChain();
 }

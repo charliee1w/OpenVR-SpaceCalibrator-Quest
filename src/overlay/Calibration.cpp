@@ -507,7 +507,7 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 
 	std::unique_ptr<char[]> buffer_array(new char [vr::k_unMaxPropertyStringSize]);
 	char* buffer = buffer_array.get();
-	bool applyEnabled = ctx.validProfile;
+	bool applyEnabled = ctx.validProfile && ctx.CanApplyCalibrationTransform();
 	bool hmdTrackingSystemOk = true;
 
 	protocol::Request setParamsReq(protocol::RequestSetAlignmentSpeedParams);
@@ -602,18 +602,19 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 			continue;
 		}
 
-		const CalibrationChain& chain = CalChains[chainIdx];
+		CalibrationChain resolved = CalChains[chainIdx];
+		AssignChainTargets(resolved);
 		protocol::Request req(protocol::RequestSetDeviceTransform);
 		req.setDeviceTransform = {
 			id,
 			true,
-			VRTranslationVec(chain.calibratedTranslation),
-			VRRotationQuat(chain.calibratedRotation),
-			chain.calibratedScale
+			VRTranslationVec(resolved.calibratedTranslation),
+			VRRotationQuat(resolved.calibratedRotation),
+			resolved.calibratedScale
 		};
 		req.setDeviceTransform.lerp = CalCtx.state == CalibrationState::Continuous;
 		req.setDeviceTransform.quash = CalCtx.state == CalibrationState::Continuous
-			&& id == (uint32_t)CalCtx.targetID
+			&& (int)id == resolved.targetID
 			&& CalCtx.quashTargetInContinuous;
 
 		SafeDriverSend(req);
@@ -636,12 +637,8 @@ void ScanAndApplyProfile(CalibrationContext &ctx)
 }
 
 namespace {
-	bool CanApplyCalibrationTransform(const CalibrationContext& ctx) {
-		return !ctx.lockRelativePosition || ctx.relativePosCalibrated;
-	}
-
 	bool ShouldApplySavedProfile(const CalibrationContext& ctx) {
-		return ctx.validProfile && CanApplyCalibrationTransform(ctx) && (
+		return ctx.validProfile && ctx.CanApplyCalibrationTransform() && (
 			ctx.state == CalibrationState::None
 			|| ctx.state == CalibrationState::Continuous
 			|| ctx.state == CalibrationState::ContinuousStandby
@@ -658,6 +655,13 @@ namespace {
 		const uint64_t presenceMask = GetTrackedDevicePresenceMask();
 		const bool devicesChanged = presenceMask != lastPresenceMask;
 		lastPresenceMask = presenceMask;
+
+		// During active continuous cal, only re-apply on hotplug — not every second.
+		if (ctx.state == CalibrationState::Continuous
+			&& calibration.isValid()
+			&& !devicesChanged) {
+			return;
+		}
 
 		const double scanInterval = (ctx.state == CalibrationState::Editing) ? 0.1 : 1.0;
 		if (!devicesChanged && (time - ctx.timeLastScan) < scanInterval) {
@@ -786,8 +790,7 @@ void CalibrationTick(double time)
 
 	if (ctx.state == CalibrationState::Continuous && ctx.slamReference
 		&& ctx.referenceTracking.quality == TrackingQuality::Degraded) {
-		calibration.PruneRecentSamples(3);
-		return;
+		calibration.PruneRecentSamples(1);
 	}
 
 	if (ctx.autoRecalOnGuardianDrift && ctx.state == CalibrationState::Continuous && ctx.slamReference) {
@@ -901,7 +904,9 @@ void CalibrationTick(double time)
 
 	if (ShouldRejectCalibrationSample(ctx.referenceTracking.quality)) {
 		if (ctx.state == CalibrationState::Continuous) {
-			return;
+			if (!(ctx.slamReference && ctx.referenceTracking.quality == TrackingQuality::Degraded)) {
+				return;
+			}
 		}
 	}
 
@@ -915,13 +920,13 @@ void CalibrationTick(double time)
 	if (calibration.SampleCount() < CalCtx.SampleCount()) return;
 	while (calibration.SampleCount() > CalCtx.SampleCount()) calibration.ShiftSample();
 
-	if (CalCtx.state == CalibrationState::Continuous && CalCtx.pauseOnReferenceJitter && calibration.SampleCount() >= 3) {
+	if (CalCtx.state == CalibrationState::Continuous && calibration.SampleCount() >= 3) {
 		const double refJitter = calibration.ReferenceJitter();
 		const double targetJitter = calibration.TargetJitter();
 		Metrics::jitterRef.Push(refJitter);
 		Metrics::jitterTarget.Push(targetJitter);
 
-		if (refJitter > CalCtx.jitterThreshold) {
+		if (CalCtx.pauseOnReferenceJitter && refJitter > CalCtx.jitterThreshold) {
 			CalCtx.Log("Paused continuous cal: high reference jitter\n");
 			return;
 		}
@@ -984,8 +989,13 @@ void CalibrationTick(double time)
 			ctx.calibratedRotation = calibration.EulerRotation();
 			ctx.calibratedTranslation = calibration.Transformation().translation() * 100.0;
 			ctx.refToTargetPose = calibration.RelativeTransformation();
+			const bool wasRelPosCalibrated = ctx.relativePosCalibrated;
 			ctx.relativePosCalibrated = calibration.isRelativeTransformationCalibrated();
-			if (CanApplyCalibrationTransform(ctx)) {
+			if (!wasRelPosCalibrated && ctx.relativePosCalibrated) {
+				calibration.ResetContinuousGuards();
+				ctx.warnedTargetPoseMissingFromShmem = false;
+			}
+			if (ctx.CanApplyCalibrationTransform()) {
 				ctx.validProfile = true;
 				SyncCalCtxToPrimaryChain();
 				ApplyChainCalibration(CalChains[0], lerp);
