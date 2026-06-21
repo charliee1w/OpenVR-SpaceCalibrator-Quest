@@ -5,6 +5,30 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
+
+function Copy-DriverDll {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    try {
+        Copy-Item $Source $Destination -Force
+        return
+    } catch {
+        # Steam.exe often keeps the driver DLL mapped even when SteamVR is stopped.
+        $staging = "$Destination.new"
+        $stale = "$Destination.stale"
+        Copy-Item $Source $staging -Force
+        if (Test-Path $Destination) {
+            Rename-Item $Destination $stale -Force
+        }
+        Move-Item $staging $Destination -Force
+        if (Test-Path $stale) {
+            Remove-Item $stale -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "Driver DLL updated via staging rename (Steam had file locked)"
+    }
+}
 $release = Join-Path $repoRoot "bin\artifacts\Release"
 $driverSrc = Join-Path $repoRoot "bin\driver_01spacecalibrator\bin\win64"
 $manifestSrc = Join-Path $repoRoot "driver_01spacecalibrator\driver.vrdrivermanifest"
@@ -30,9 +54,9 @@ New-Item -ItemType Directory -Force -Path (Join-Path $overlayDest "bin\win64") |
 New-Item -ItemType Directory -Force -Path $driverDest | Out-Null
 
 Copy-Item (Join-Path $release "SpaceCalibrator.exe") (Join-Path $overlayDest "SpaceCalibrator.exe") -Force
-Copy-Item (Join-Path $driverSrc "driver_01spacecalibrator.dll") (Join-Path $overlayDest "bin\win64\driver_01spacecalibrator.dll") -Force
+Copy-DriverDll (Join-Path $driverSrc "driver_01spacecalibrator.dll") (Join-Path $overlayDest "bin\win64\driver_01spacecalibrator.dll")
 Copy-Item $manifestSrc (Join-Path $overlayDest "driver.vrdrivermanifest") -Force
-Copy-Item (Join-Path $driverSrc "driver_01spacecalibrator.dll") (Join-Path $driverDest "driver_01spacecalibrator.dll") -Force
+Copy-DriverDll (Join-Path $driverSrc "driver_01spacecalibrator.dll") (Join-Path $driverDest "driver_01spacecalibrator.dll")
 Copy-Item $manifestSrc (Join-Path $driverRoot "driver.vrdrivermanifest") -Force
 
 & (Join-Path $PSScriptRoot "disable-spaceoverride-driver.ps1") -SteamRoot $SteamRoot
