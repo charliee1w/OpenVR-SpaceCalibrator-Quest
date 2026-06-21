@@ -38,8 +38,9 @@ constexpr const char* STEAM_MUTEX_KEY = "Global\\MUTEX__SpaceCalibrator_Steam";
 HANDLE hSteamMutex = INVALID_HANDLE_VALUE;
 bool s_isGitHubVersionInstalled = false;
 
-extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
-extern "C" __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 0x00000001;
+// Do not force discrete GPU for a background calibration process.
+extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000000;
+extern "C" __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 0x00000000;
 
 void CreateConsole()
 {
@@ -93,6 +94,16 @@ static int fboTextureWidth = 0, fboTextureHeight = 0;
 static char cwd[MAX_PATH];
 const float MINIMIZED_MAX_FPS = 60.0f;
 static constexpr double DASHBOARD_MAX_FPS = 15.0;
+static bool glRendererInitialized = false;
+
+static double GetLoopTime() {
+	if (glRendererInitialized && glfwWindow) {
+		return glfwGetTime();
+	}
+	static const auto start = std::chrono::steady_clock::now();
+	const auto now = std::chrono::steady_clock::now();
+	return std::chrono::duration<double>(now - start).count();
+}
 
 enum DWMA_USE_IMMSERSIVE_DARK_MODE_ENUM {
 	DWMA_USE_IMMERSIVE_DARK_MODE = 20,
@@ -333,59 +344,56 @@ bool UninstallGithubSpaceCalibrator() {
 	return false;
 }
 
-double lastFrameStartTime = glfwGetTime();
+double lastFrameStartTime = 0;
 void RunLoop() {
-	while (!glfwWindowShouldClose(glfwWindow))
+	while (!glfwWindow || !glfwWindowShouldClose(glfwWindow))
 	{
 		TryCreateVROverlay();
-		double time = glfwGetTime();
+		const double time = GetLoopTime();
 		CalibrationTick(time);
 
 		bool dashboardVisible = false;
-		int width, height;
-		glfwGetFramebufferSize(glfwWindow, &width, &height);
 
 		if (overlayMainHandle && vr::VROverlay())
 		{
-			auto &io = ImGui::GetIO();
 			dashboardVisible = vr::VROverlay()->IsActiveDashboardOverlay(overlayMainHandle);
 
 			static bool keyboardOpen = false, keyboardJustClosed = false;
 
-			// After closing the keyboard, this code waits one frame for ImGui to pick up the new text from SetActiveText
-			// before clearing the active widget. Then it waits another frame before allowing the keyboard to open again,
-			// otherwise it will do so instantly since WantTextInput is still true on the second frame.
-			if (keyboardJustClosed && keyboardOpen)
-			{
-				ImGui::ClearActiveID();
-				keyboardOpen = false;
-			}
-			else if (keyboardJustClosed)
-			{
-				keyboardJustClosed = false;
-			}
-			else if (!io.WantTextInput)
-			{
-				// User might close the keyboard without hitting Done, so we unset the flag to allow it to open again.
-				keyboardOpen = false;
-			}
-			else if (io.WantTextInput && !keyboardOpen && !keyboardJustClosed)
-			{
-				int id = ImGui::GetActiveID();
-				auto textInfo = ImGui::GetInputTextState(id);
+			if (glRendererInitialized) {
+				auto &io = ImGui::GetIO();
 
-				if (textInfo != nullptr) {
-					textBuf[0] = 0;
-					int len = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, textBuf, sizeof(textBuf), nullptr, nullptr);
-					textBuf[std::min(static_cast<size_t>(len), sizeof(textBuf) - 1)] = 0;
+				if (keyboardJustClosed && keyboardOpen)
+				{
+					ImGui::ClearActiveID();
+					keyboardOpen = false;
+				}
+				else if (keyboardJustClosed)
+				{
+					keyboardJustClosed = false;
+				}
+				else if (!io.WantTextInput)
+				{
+					keyboardOpen = false;
+				}
+				else if (io.WantTextInput && !keyboardOpen && !keyboardJustClosed)
+				{
+					int id = ImGui::GetActiveID();
+					auto textInfo = ImGui::GetInputTextState(id);
 
-					uint32_t unFlags = 0; // EKeyboardFlags 
+					if (textInfo != nullptr) {
+						textBuf[0] = 0;
+						int len = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, textBuf, sizeof(textBuf), nullptr, nullptr);
+						textBuf[std::min(static_cast<size_t>(len), sizeof(textBuf) - 1)] = 0;
 
-					vr::VROverlay()->ShowKeyboardForOverlay(
-						overlayMainHandle, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
-						unFlags, "Space Calibrator Overlay", sizeof textBuf, textBuf, 0
-					);
-					keyboardOpen = true;
+						uint32_t unFlags = 0;
+
+						vr::VROverlay()->ShowKeyboardForOverlay(
+							overlayMainHandle, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
+							unFlags, "Space Calibrator Overlay", sizeof textBuf, textBuf, 0
+						);
+						keyboardOpen = true;
+					}
 				}
 			}
 
@@ -394,22 +402,25 @@ void RunLoop() {
 			{
 				switch (vrEvent.eventType) {
 				case vr::VREvent_MouseMove:
-					io.AddMousePosEvent(vrEvent.data.mouse.x, vrEvent.data.mouse.y);
+					if (glRendererInitialized) ImGui::GetIO().AddMousePosEvent(vrEvent.data.mouse.x, vrEvent.data.mouse.y);
 					break;
 				case vr::VREvent_MouseButtonDown:
-					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, true);
+					if (glRendererInitialized) ImGui::GetIO().AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, true);
 					break;
 				case vr::VREvent_MouseButtonUp:
-					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, false);
+					if (glRendererInitialized) ImGui::GetIO().AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, false);
 					break;
 				case vr::VREvent_ScrollDiscrete:
 				{
-					float x = vrEvent.data.scroll.xdelta * 360.0f * 8.0f;
-					float y = vrEvent.data.scroll.ydelta * 360.0f * 8.0f;
-					io.AddMouseWheelEvent(x, y);
+					if (glRendererInitialized) {
+						float x = vrEvent.data.scroll.xdelta * 360.0f * 8.0f;
+						float y = vrEvent.data.scroll.ydelta * 360.0f * 8.0f;
+						ImGui::GetIO().AddMouseWheelEvent(x, y);
+					}
 					break;
 				}
 				case vr::VREvent_KeyboardDone: {
+					if (!glRendererInitialized) break;
 					vr::VROverlay()->GetKeyboardText(textBuf, sizeof textBuf);
 
 					int id = ImGui::GetActiveID();
@@ -429,8 +440,13 @@ void RunLoop() {
 			}
 		}
 
-		// Dashboard only — no desktop mirror. Cal tick stays at wantedUpdateInterval.
-		const bool shouldRender = dashboardVisible;
+		if (dashboardVisible && !glRendererInitialized) {
+			CreateGLFWWindow();
+			glRendererInitialized = true;
+			lastFrameStartTime = glfwGetTime();
+		}
+
+		const bool shouldRender = glRendererInitialized && dashboardVisible;
 
 		if (shouldRender)
 		{
@@ -516,7 +532,11 @@ void RunLoop() {
 			waitEventsTimeout = std::min(waitEventsTimeout, dashboardInterval);
 		}
 
-		glfwWaitEventsTimeout(waitEventsTimeout);
+		if (glRendererInitialized && glfwWindow) {
+			glfwWaitEventsTimeout(waitEventsTimeout);
+		} else {
+			std::this_thread::sleep_for(std::chrono::duration<double>(waitEventsTimeout));
+		}
 
 		if (shouldRender && glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED) != 0)
 		{
@@ -673,7 +693,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 			}
 		}
 		VerifySetupCorrect();
-		CreateGLFWWindow();
 		InitCalibrator();
 		LoadProfile(CalCtx);
 		InitGoreSetup(CalCtx);
@@ -681,16 +700,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 
 		vr::VR_Shutdown();
 
-		if (fboHandle)
-			glDeleteFramebuffers(1, &fboHandle);
+		if (glRendererInitialized) {
+			if (fboHandle)
+				glDeleteFramebuffers(1, &fboHandle);
 
-		if (fboTextureHandle)
-			glDeleteTextures(1, &fboTextureHandle);
+			if (fboTextureHandle)
+				glDeleteTextures(1, &fboTextureHandle);
 
-		ImGui_ImplOpenGL3_Shutdown();
-		ImGui_ImplGlfw_Shutdown();
-		ImPlot::DestroyContext();
-		ImGui::DestroyContext();
+			ImGui_ImplOpenGL3_Shutdown();
+			ImGui_ImplGlfw_Shutdown();
+			ImPlot::DestroyContext();
+			ImGui::DestroyContext();
+		}
 	}
 	catch (std::runtime_error &e)
 	{
