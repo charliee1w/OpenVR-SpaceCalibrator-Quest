@@ -1,0 +1,56 @@
+---
+description: OpenVR Space Calibrator fork — Quest SLAM continuous calibration
+alwaysApply: true
+---
+
+# Space Calibrator agent rules
+
+Quest SLAM + lighthouse continuous calibration fork (`1.5.1-gore-contcal6`).
+
+## Memory first (mandatory)
+
+`consolidation_memory` MCP is configured with project `space-calibrator`. On **every
+user turn**, call `memory_recall` as your **first** tool — before shell, reads,
+edits, searches, or subagents.
+
+1. `memory_recall` with a query from the user's goal (`include_knowledge=true`, `n_results=3`).
+2. Then proceed with other work.
+3. `memory_store` after meaningful progress (calibration fixes, tuning wins, deploy notes).
+4. `memory_detect_drift` after substantial C++ edits.
+5. Final `memory_recall` before closing the turn.
+
+If memory tools fail, say so once and continue without fabricating results.
+
+## Before coding
+
+Read when touching the area:
+
+- [README.md](README.md) — problem statement and fork features
+- [docs/ROADMAP.md](docs/ROADMAP.md) — phase status and ceiling
+- [docs/P4_TUNING.md](docs/P4_TUNING.md) — cont-cal parameter tuning
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — SteamVR driver deploy
+
+## Project map
+
+| Area | Path |
+|------|------|
+| Continuous calibration | `src/overlay/Calibration*.cpp`, `GuardianDrift.*` |
+| UI / presets | `src/overlay/UserInterface.cpp`, `Configuration.*` |
+| IPC / driver | `src/overlay/IPCClient.*`, `src/driver/` |
+| Profiles | `profiles/` (example presets; personal P4 winners are gitignored) |
+| Deploy | `scripts/deploy.ps1` |
+
+## Store memories for
+
+- P4/P5 tuning outcomes and winning parameter sets
+- Guardian drift debounce behavior and VD latency quirks
+- Deploy path issues (`01spacecalibrator` vs stale DLL)
+- IPC race fixes and version bump rationale
+
+Use tags like `calibration`, `guardian`, `quest-slam`, `p4-tuning`, `deploy`, `ipc`.
+
+## Build notes
+
+- CMake/MSVC Windows project; build output under `bin/`
+- Bump `src/common/Version.h` when IPC or driver protocol changes
+- Do not commit personal `profiles/p4-*.json` or log artifacts
