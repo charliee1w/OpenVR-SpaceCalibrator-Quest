@@ -27,7 +27,7 @@ function Set-ProfileProp($obj, [string]$Name, $Value) {
     $obj | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
 }
 
-# P4/P5 winner — Quest + VD + lighthouse head (contcal6 SLAM preset values)
+# P4/P5 winner — Quest + VD + lighthouse head (contcal7 SLAM preset values)
 Set-ProfileProp $p autostart_continuous_calibration $true
 Set-ProfileProp $p lock_relative_position $true
 Set-ProfileProp $p jitter_threshold 0.15
@@ -61,7 +61,7 @@ Write-Host "  max_relative_error_threshold: 0.008"
 Write-Host "  continuous_calibration_target_offset: 0,0,0"
 Write-Host "  continuousCalibrationThreshold: 1.5"
 Write-Host "  align_rot_speed_scale: 0.45"
-Write-Host "  spike/guardian tuning: contcal6 defaults"
+Write-Host "  spike/guardian tuning: contcal7 defaults"
 Write-Host "  devices/transform: unchanged"
 
 if ($WhatIf) {

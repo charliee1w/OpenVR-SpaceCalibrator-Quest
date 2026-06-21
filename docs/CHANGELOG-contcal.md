@@ -1,5 +1,19 @@
 # contcal fork changelog
 
+## 1.5.1-gore-contcal7 (2026-06-20)
+
+UI polish — industrial VR theme and reorganized overlay.
+
+| Change | Problem addressed | File(s) |
+|--------|-------------------|---------|
+| **Dark cockpit theme** | Hard to read status in VR overlay | `ui_theme.cpp`, `imgui_extensions.cpp` |
+| **Device status cards** | Reference/target state buried in menus | `UserInterface.cpp` |
+| **Live metrics on Status tab** | P4 tuning required external log analysis | `UserInterface.cpp`, `CalibrationMetrics.h` |
+| **Collapsible Quest/SLAM settings** | SLAM tuning sliders cluttered main view | `UserInterface.cpp` |
+| **Deploy hardening** | `deploy.ps1` omitted `driver.vrdrivermanifest` | `scripts/deploy.ps1`, `scripts/validate-install.ps1` |
+
+No IPC or driver protocol changes — overlay-only release atop contcal6 calibration logic.
+
 ## 1.5.1-gore-contcal6 (2026-06-20)
 
 P5 adaptive polish — completes remaining roadmap items from contcal5.

@@ -6,7 +6,7 @@
 
 # OpenVR-SpaceCalibrator — Quest SLAM continuous calibration fork
 
-**Version:** `1.5.1-gore-contcal6`  
+**Version:** `1.5.1-gore-contcal7`  
 **Base:** [hyblocker/OpenVR-SpaceCalibrator](https://github.com/hyblocker/OpenVR-SpaceCalibrator) `develop`  
 **License:** MIT (see [LICENSE](LICENSE))
 
@@ -105,7 +105,7 @@ Enable **autostart continuous calibration** in the overlay and save your profile
 
 ### Option A — Build from source (recommended for this fork)
 
-See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. Prebuilt binaries: [GitHub Releases](https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest/releases) (`contcal6` pending upload).
+See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. Prebuilt binaries: [GitHub Releases](https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest/releases) (`v1.5.1-contcal7`).
 
 ### Option B — Steam Space Calibrator + replace binaries
 
@@ -191,6 +191,7 @@ Steam/steamapps/common/SteamVR/drivers/01spacecalibrator/
 
 ```powershell
 .\scripts\deploy.ps1
+.\scripts\validate-install.ps1
 ```
 
 Or manually copy from `bin/artifacts/Release` and `bin/driver_01spacecalibrator/`. Remove any `*.dll.stale` in the drivers folder. Restart SteamVR.
@@ -198,8 +199,10 @@ Or manually copy from `bin/artifacts/Release` and `bin/driver_01spacecalibrator/
 **Verify:**
 
 ```powershell
+.\scripts\validate-install.ps1
+# or manually:
 Test-Path "SteamVR\drivers\01spacecalibrator\bin\win64\driver_01spacecalibrator.dll"
-# Driver log should show: 1.5.1-gore-contcal6 loaded
+# Driver log should show: 1.5.1-gore-contcal7 loaded
 ```
 
 ---
@@ -222,6 +225,8 @@ Analyze latest session:
 
 ```powershell
 .\scripts\analyze-spacecal-log.ps1 -Latest
+.\scripts\run-p4-validation.ps1 -AnalyzeOnly    # 10+ min P4 check
+.\scripts\run-head-ab-session.ps1 -Compare      # Tundra vs Vive 3.0 A/B
 ```
 
 ---

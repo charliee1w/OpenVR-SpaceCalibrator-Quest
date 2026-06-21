@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Space Calibrator agent rules
 
-Quest SLAM + lighthouse continuous calibration fork (`1.5.1-gore-contcal6`).
+Quest SLAM + lighthouse continuous calibration fork (`1.5.1-gore-contcal7`).
 
 ## Memory first (mandatory)
 
@@ -38,7 +38,7 @@ Read when touching the area:
 | UI / presets | `src/overlay/UserInterface.cpp`, `Configuration.*` |
 | IPC / driver | `src/overlay/IPCClient.*`, `src/driver/` |
 | Profiles | `profiles/` (example presets; personal P4 winners are gitignored) |
-| Deploy | `scripts/deploy.ps1` |
+| Deploy | `scripts/deploy.ps1`, `scripts/validate-install.ps1` |
 
 ## Store memories for
 

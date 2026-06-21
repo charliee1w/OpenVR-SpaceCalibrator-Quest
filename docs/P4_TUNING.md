@@ -1,6 +1,6 @@
 # Phase 4 — Measurement & profile tuning
 
-**Status:** ✅ **DONE** (2026-06-20)  
+**Status:** ✅ **DONE** (2026-06-20) — optional 10+ min validation pending VR session  
 **Winner template:** [`profiles/example-quest-lighthouse.json`](../profiles/example-quest-lighthouse.json)  
 **Apply to live profile:** `.\scripts\apply-p4-winner.ps1` (SteamVR stopped or re-save in overlay)
 
@@ -17,8 +17,8 @@ Turn subjective “works really well” into a **reproducible profile** with tun
 | Winner slider profile documented | ✅ `example-quest-lighthouse.json` + `apply-p4-winner.ps1` |
 | `error_byRelPose` median < 15 mm | ✅ 8.1 mm baseline (`spacecal_log.2026-06-20T20-53-47.txt`) |
 | Subjective FBT locked | ✅ user-validated contcal4 session |
-| contcal5 deployed (driver + overlay) | ✅ 2026-06-20 |
-| 10+ min metrics log on contcal5 | ⬜ optional confirmation — prior logs were contcal4 / sparse 1 Hz |
+| contcal7 deployed (driver + overlay) | ✅ use `deploy.ps1` + `validate-install.ps1` |
+| 10+ min metrics log on contcal7 | ⬜ run `.\scripts\run-p4-validation.ps1` after VR session |
 
 ---
 
@@ -35,7 +35,7 @@ Turn subjective “works really well” into a **reproducible profile** with tun
 | `static_calibration` | true | |
 | `quash_target_in_continuous` | true | |
 
-**Not tuned (deferred):** Vive 3.0 head A/B, SpaceOverride A/B — optional P6 / ceiling work.
+**Head tracker A/B:** Tundra vs Vive 3.0 — run `.\scripts\run-head-ab-session.ps1` (see below).
 
 ---
 
@@ -44,17 +44,72 @@ Turn subjective “works really well” into a **reproducible profile** with tun
 | Session | Date | Build | Change | Median err | Duration | Notes |
 |---------|------|-------|--------|------------|----------|-------|
 | baseline | 2026-06-20 | contcal4 | defaults + saved cal | **8.1 mm** | short | User: “works really well” |
-| S1a | 2026-06-20 | contcal4 | offset 0,0,0 | 16.7 mm* | 2.7 min cont-cal* | *Sparse metrics (5 rows); driver still contcal4 |
-| **winner** | 2026-06-20 | **contcal5** | P4 profile applied | — | — | `apply-p4-winner.ps1` + deploy |
+| S1a | 2026-06-20 | contcal4 | offset 0,0,0 | 16.7 mm* | 2.7 min cont-cal* | *Sparse metrics (5 rows); not a valid P4 duration run |
+| winner | 2026-06-20 | contcal5 | P4 profile applied | — | — | `apply-p4-winner.ps1` + deploy |
+| p4-validation | — | contcal7 | 10+ min session | — | — | **pending** — `run-p4-validation.ps1` |
+| head-ab-tundra | — | contcal7 | Tundra head | — | — | **pending** — `run-head-ab-session.ps1` |
+| head-ab-vive3 | — | contcal7 | Vive 3.0 head | — | — | **pending** — `run-head-ab-session.ps1` |
 
 ---
 
 ## Before each tuning session
 
-1. Confirm deploy: driver log `1.5.1-gore-contcal5`
+1. SteamVR stopped → `.\scripts\deploy.ps1` → `.\scripts\validate-install.ps1`
 2. `.\scripts\apply-p4-winner.ps1` if profile was reset
 3. Restart SteamVR → head tracker first → cont-cal → body trackers
 4. Metrics: **1 row/sec** while continuous cal runs (no debug checkbox)
+
+---
+
+## 10+ min validation (closes optional P4 criterion)
+
+```powershell
+.\scripts\run-p4-validation.ps1
+```
+
+Follow the prompts: ~10 minutes in VR with continuous cal active, then the script analyzes the latest log and reports PASS/FAIL.
+
+**Pass:** ≥600 s continuous-cal segment, ≥~600 metric rows, median `error_byRelPose` < 15 mm.
+
+**Analyze an existing log without prompts:**
+
+```powershell
+.\scripts\run-p4-validation.ps1 -AnalyzeOnly -LogPath "path\to\spacecal_log.*.txt"
+```
+
+---
+
+## Head tracker A/B (Tundra vs Vive 3.0)
+
+Same room, same VD settings, same strap — only swap the head tracker.
+
+**Session 1 — Tundra:**
+
+```powershell
+.\scripts\run-head-ab-session.ps1 -HeadTracker tundra
+```
+
+**Session 2 — Vive 3.0** (swap tracker, restart SteamVR, recalibrate devices if needed):
+
+```powershell
+.\scripts\run-head-ab-session.ps1 -HeadTracker vive3
+```
+
+**Compare archived logs:**
+
+```powershell
+.\scripts\run-head-ab-session.ps1 -Compare
+```
+
+Logs are copied to `%LOCALAPPDATA%\..\LocalLow\SpaceCalibrator\ab-sessions\`.
+
+**Manual compare** with explicit paths:
+
+```powershell
+.\scripts\compare-head-ab.ps1 -TundraLog "...\tundra-latest.txt" -Vive3Log "...\vive3-latest.txt"
+```
+
+Lower median `error_byRelPose` wins on paper; confirm subjective FBT feel in VRChat.
 
 ---
 
@@ -95,15 +150,3 @@ HKCU\Software\Classes\Local Settings\Software\OpenVR-SpaceCalibrator\Config
 (Get-ItemProperty 'HKCU:\Software\Classes\Local Settings\Software\OpenVR-SpaceCalibrator').Config |
   Out-File 'profiles\p4-export.json' -Encoding utf8
 ```
-
----
-
-## Optional post-P4 validation
-
-One 10+ min VRChat session on **contcal5** with winner profile, then:
-
-```powershell
-.\scripts\analyze-spacecal-log.ps1 -Latest
-```
-
-Expect: ≥600 s continuous-cal segment, median `error_byRelPose` < 15 mm, few guardian events.

@@ -1,7 +1,7 @@
 # Roadmap — Quest SLAM → lighthouse cont-cal fork
 
 **Last updated:** 2026-06-20  
-**Current:** `1.5.1-gore-contcal6` — P5 adaptive polish complete
+**Current:** `1.5.1-gore-contcal7` — P5 adaptive polish + UI polish complete
 **Audience:** Contributors and power users — ordered phases ending at the **logical ceiling** for this architecture.
 
 ---
@@ -90,10 +90,11 @@ flowchart LR
 | Profile load/save for chains | ✅ |
 | UI chain list | ✅ |
 
-**Guardian thresholds (current code):**
+**Guardian thresholds (SLAM preset, contcal5+):**
 
-- Translation drift &gt; 20 mm or yaw &gt; 3° → drift event
-- Cooldown: 20 frames after handling
+- Translation drift &gt; 35 mm or yaw &gt; 5° → drift event (3 consecutive confirms)
+- Cooldown: 60 frames after handling
+- Exposed in overlay UI + profile JSON (contcal6)
 
 **Exit criteria:** Guardian reset doesn't permanently corrupt lighthouse alignment (subjective + `GuardianDrift` log annotations).
 
@@ -113,8 +114,8 @@ flowchart LR
 | S2–S4 thresholds | ✅ contcal5 preset (1.5 / 0.15 / 0.008) |
 | contcal5 full deploy (overlay + driver) | ✅ |
 | Subjective FBT locked | ✅ user-validated |
-| 10+ min contcal5 metrics log | ⬜ optional confirmation — see [P4_TUNING.md](./P4_TUNING.md) |
-| Tundra vs Vive 3.0 head A/B | ⬜ deferred → P6 / ceiling |
+| 10+ min contcal7 metrics log | ⬜ run `scripts/run-p4-validation.ps1` — see [P4_TUNING.md](./P4_TUNING.md) |
+| Tundra vs Vive 3.0 head A/B | ⬜ run `scripts/run-head-ab-session.ps1` — see [P4_TUNING.md](./P4_TUNING.md) |
 | SpaceOverride A/B | ⬜ deferred → P6 |
 
 **Exit criteria met:** Winner profile documented + applied; baseline 8.1 mm `error_byRelPose`; subjective locked.
@@ -144,7 +145,7 @@ flowchart LR
 |------|-------|
 | Restore Steam `appmanifest_3368750.acf` + install script | Clean deploy path |
 | CI build artifact zip (overlay + driver) | One-copy deploy |
-| Post-install validator script | Checks DLL, pipe, manifest paths |
+| Post-install validator script | ✅ `scripts/validate-install.ps1` |
 | Upstream PR subset (SLAM preset, CollectSample fix) | hyblocker #50 — likely partial accept |
 | Changelog per contcalN tag | User-facing |
 

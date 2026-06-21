@@ -21,6 +21,16 @@ The overlay **Save profile** button writes here automatically. Files in this fol
 .\scripts\apply-hardware-preset.ps1 -HeadTracker tundra   # or vive3
 ```
 
+**Head tracker A/B (Tundra vs Vive 3.0):**
+
+```powershell
+.\scripts\run-head-ab-session.ps1 -HeadTracker tundra
+.\scripts\run-head-ab-session.ps1 -HeadTracker vive3
+.\scripts\run-head-ab-session.ps1 -Compare
+```
+
+See [docs/P4_TUNING.md](../docs/P4_TUNING.md).
+
 **Do not commit personal profiles** (serials, chaperone geometry, calibration offsets from your room).
 
 ### Import example (SteamVR stopped)

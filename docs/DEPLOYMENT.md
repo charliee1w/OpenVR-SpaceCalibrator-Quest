@@ -17,22 +17,27 @@ cmake --build bin --config Release
 .\scripts\deploy.ps1
 ```
 
+Copies overlay EXE, driver DLL, and `driver.vrdrivermanifest` to both Steam install paths.
+
 Manual paths: see [README.md](../README.md#deploy-to-steamvr).
 
 ## Verification
 
 ```powershell
-# DLL present
+.\scripts\validate-install.ps1
+# With SteamVR running — also check IPC:
+.\scripts\validate-install.ps1 -RequireSteamVR
+```
+
+Manual checks:
+
+```powershell
+Test-Path "$env:ProgramFiles(x86)\Steam\steamapps\common\SteamVR\drivers\01spacecalibrator\driver.vrdrivermanifest"
 Test-Path "$env:ProgramFiles(x86)\Steam\steamapps\common\SteamVR\drivers\01spacecalibrator\bin\win64\driver_01spacecalibrator.dll"
-
-# IPC pipe (SteamVR running)
-Test-Path "\\.\pipe\OpenVRSpaceCalibratorDriver"
-
-# Driver log tail
 Get-Content "$env:ProgramFiles(x86)\Steam\steamapps\common\SteamVR\drivers\01spacecalibrator\bin\win64\space_calibrator_driver.log" -Tail 15
 ```
 
-Expect: `OpenVR-SpaceCalibratorDriver 1.5.1-gore-contcal5 loaded` and `IPC client connected`.
+Expect: `OpenVR-SpaceCalibratorDriver 1.5.1-gore-contcal7 loaded` and `IPC client connected`.
 
 ## Logs
 
