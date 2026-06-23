@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "Configuration.h"
 #include "CalibrationChain.h"
+#include "DevicePresets.h"
 #include "VRState.h"
 
 #include <picojson.h>
@@ -244,6 +245,11 @@ static void ParseChainObject(const picojson::object& obj, CalibrationChain& chai
 		if (obj.count("auto_recal_on_guardian_drift") && obj.at("auto_recal_on_guardian_drift").is<bool>()) {
 			sharedCtx.autoRecalOnGuardianDrift = obj.at("auto_recal_on_guardian_drift").get<bool>();
 		}
+		if (obj.count("device_preset") && obj.at("device_preset").is<std::string>()) {
+			sharedCtx.devicePresetId = obj.at("device_preset").get<std::string>();
+		} else {
+			sharedCtx.devicePresetId = InferDevicePresetId(chain.name);
+		}
 		if (obj.count("chaperone") && obj.at("chaperone").is<picojson::object>()) {
 			auto chaperone = obj.at("chaperone").get<picojson::object>();
 			sharedCtx.chaperone.autoApply = chaperone["auto_apply"].get<bool>();
@@ -370,6 +376,9 @@ static picojson::object WriteChainObject(const CalibrationChain& chain, Calibrat
 		SetJsonNumber(profile, "guardian_drift_confirm_checks", (double)ctx.guardianDriftConfirmChecks);
 		SetJsonNumber(profile, "guardian_drift_cooldown_frames", (double)ctx.guardianDriftCooldownFrames);
 		SetJsonBool(profile, "auto_recal_on_guardian_drift", ctx.autoRecalOnGuardianDrift);
+		if (!ctx.devicePresetId.empty()) {
+			profile["device_preset"].set<std::string>(ctx.devicePresetId);
+		}
 		if (ctx.chaperone.valid) {
 			picojson::object chaperone;
 			SetJsonBool(chaperone, "auto_apply", ctx.chaperone.autoApply);

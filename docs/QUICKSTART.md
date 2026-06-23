@@ -32,17 +32,18 @@ List presets:
 
 ## 2. First VR session
 
-1. Restart **SteamVR**.
-2. Power on **head tracker only** first.
-3. Open **Space Calibrator** from the SteamVR dashboard.
-4. Confirm **reference** = your HMD (`oculus` or `pico`), **target** = head tracker (`lighthouse`).
-5. **Copy Chaperone** once.
-6. Run calibration (one-shot or continuous). Enable:
+1. In Space Cal **Device setup** dropdown (main menu or Continuous Cal → Settings), pick your headset + streaming path (Quest+VD, Pico+ALVR, etc.). This loads tuned sliders; save profile after room calibration.
+2. Restart **SteamVR**.
+3. Power on **head tracker only** first.
+4. Open **Space Calibrator** from the SteamVR dashboard.
+5. Confirm **reference** = your HMD (`oculus` or `pico`), **target** = head tracker (`lighthouse`).
+6. **Copy Chaperone** once.
+7. Run calibration (one-shot or continuous). Enable:
    - Continuous calibration
    - Lock relative position
    - Autostart continuous calibration
-7. **Save profile** (updates device serials from live hardware).
-8. Turn on body trackers; play normally for 10+ minutes.
+8. **Save profile** (updates device serials from live hardware).
+9. Turn on body trackers; play normally for 10+ minutes.
 
 If the UI shows a **VDXR / tracking system warning**, fix VD runtime before tuning sliders.
 

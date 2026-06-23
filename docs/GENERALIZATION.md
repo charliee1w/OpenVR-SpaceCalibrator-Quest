@@ -11,7 +11,8 @@
 | Layer | Status in branch | Notes |
 |-------|------------------|-------|
 | **Algorithm** | ✅ on main (contcal9) | `IsSlamTrackingSystem`, auto SLAM preset, diverged recovery |
-| **Starter profiles** | 🧪 this branch | VD / ALVR / Link latency tiers in JSON |
+| **Device preset dropdown (UI)** | 🧪 this branch | In-overlay selector; persists `device_preset` in profile |
+| **Starter profiles** | 🧪 this branch | VD / ALVR / Link latency tiers in JSON + scripts |
 | **Install/import scripts** | 🧪 this branch | `install.ps1`, `import-profile.ps1`, `list-starter-profiles.ps1` |
 | **Release packaging** | 🧪 this branch | Zip includes scripts + profiles + QUICKSTART |
 | **Neutral versioning** | 🧪 this branch | `1.5.1-slam-exp1` (drop `gore-` prefix) |

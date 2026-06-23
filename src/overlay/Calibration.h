@@ -72,6 +72,7 @@ struct CalibrationContext
 	int continuousFrozenFrameThreshold = 6;
 	bool pauseOnReferenceJitter = true;
 	bool slamReference = false;
+	std::string devicePresetId = "custom";
 	bool applyHeadModelToReference = true;
 	bool rejectYawDriftPoses = true;
 	bool trustTargetYaw = true;

@@ -13,6 +13,7 @@
 #include <imgui/imgui.h>
 #include "imgui_extensions.h"
 #include "ui_theme.h"
+#include "DevicePresets.h"
 
 void TextWithWidth(const char *label, const char *text, float width);
 void DrawVectorElement(const std::string id, const char* text, double* value, int defaultValue = 0, const char* defaultValueStr = " 0 ");
@@ -96,6 +97,7 @@ void ShowVersionLine() {
 
 void CCal_BasicInfo();
 void CCal_DrawSettings();
+static void DrawDevicePresetSelector();
 
 void BuildContinuousCalDisplay() {
 	ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -172,6 +174,10 @@ void CCal_DrawSettings() {
 
 	// panel size for boxes
 	ImVec2 panel_size { ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x, 0 };
+
+	ImGui::BeginGroupPanel("Device setup preset", panel_size);
+	DrawDevicePresetSelector();
+	ImGui::EndGroupPanel();
 
 	ImGui::BeginGroupPanel("Tip", panel_size);
 	ImGui::Text("Hover over settings to learn more about them!");
@@ -499,6 +505,44 @@ static void SetStatusCellBg(const ImVec4& color) {
 	ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, SpaceCalUI::ColorToU32(color, 0.35f));
 }
 
+static void DrawDevicePresetSelector() {
+	const DevicePresetDefinition* current = FindDevicePreset(CalCtx.devicePresetId.c_str());
+	const char* preview = current ? current->label : "Custom (manual sliders)";
+
+	ImGui::Text("Device setup");
+	ImGui::SameLine();
+	if (ImGui::BeginCombo("##device_setup_preset", preview)) {
+		for (int i = 0; i < DevicePresetCount(); ++i) {
+			const DevicePresetDefinition* preset = FindDevicePresetByIndex(i);
+			if (!preset) {
+				continue;
+			}
+			const bool selected = CalCtx.devicePresetId == preset->id;
+			if (ImGui::Selectable(preset->label, selected)) {
+				if (!selected) {
+					ApplyDevicePreset(CalCtx, preset->id);
+					SaveProfile(CalCtx);
+				}
+			}
+			if (ImGui::IsItemHovered() && preset->description[0] != '\0') {
+				ImGui::SetTooltip("%s", preset->description);
+			}
+		}
+		ImGui::EndCombo();
+	}
+	if (current && current->description[0] != '\0') {
+		ImGui::TextDisabled("%s", current->description);
+	}
+	if (CalCtx.slamReference) {
+		ImGui::TextDisabled(
+			"Reference: %s | skew %.3fs | offset %.3fs",
+			GetPrettyTrackingSystemName(CalCtx.referenceTrackingSystem),
+			CalCtx.maxPoseTimeSkew,
+			CalCtx.maxReferencePoseTimeOffset);
+	}
+	ImGui::Spacing();
+}
+
 static void DrawProfileStatusBanner() {
 	if (!Driver.IsConnected()) {
 		ImGui::TextColored(SpaceCalUI::StatusError(),
@@ -541,6 +585,8 @@ static void DrawProfileStatusBanner() {
 }
 
 void CCal_BasicInfo() {
+	DrawDevicePresetSelector();
+
 	if (CalCtx.enabled) {
 		ImGui::TextColored(SpaceCalUI::StatusOk(), "Offsets active");
 	} else if (CalCtx.validProfile) {
@@ -691,6 +737,10 @@ void BuildMenu(bool runningInOverlay)
 
 	if (CalCtx.state == CalibrationState::None)
 	{
+		ImGui::BeginGroupPanel("Device setup preset", ImVec2(ImGui::GetWindowContentRegionWidth(), 0));
+		DrawDevicePresetSelector();
+		ImGui::EndGroupPanel();
+
 		DrawProfileStatusBanner();
 
 		float width = ImGui::GetWindowContentRegionWidth(), scale = 1.0f;

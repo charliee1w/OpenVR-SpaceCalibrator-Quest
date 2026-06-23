@@ -1,6 +1,7 @@
 [
   {
     "chain_name": "quest-vd-lighthouse",
+    "device_preset": "quest_vd",
     "alignment_params": {
       "align_speed_large": 2,
       "align_speed_small": 1,

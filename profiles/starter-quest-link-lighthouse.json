@@ -1,6 +1,7 @@
 [
   {
     "chain_name": "quest-link-lighthouse",
+    "device_preset": "quest_link",
     "alignment_params": {
       "align_speed_large": 2,
       "align_speed_small": 1,

@@ -12,10 +12,10 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 $regKey = "HKCU:\Software\Classes\Local Settings\Software\OpenVR-SpaceCalibrator"
 
 $presets = @{
-    'quest-vd'   = 'profiles\starter-quest-vd-lighthouse.json'
-    'pico-alvr'  = 'profiles\starter-pico-alvr-lighthouse.json'
-    'quest-link' = 'profiles\starter-quest-link-lighthouse.json'
-    'p4-winner'  = 'profiles\example-quest-lighthouse.json'
+    'quest-vd'   = @{ Path = 'profiles\starter-quest-vd-lighthouse.json'; DevicePreset = 'quest_vd' }
+    'pico-alvr'  = @{ Path = 'profiles\starter-pico-alvr-lighthouse.json'; DevicePreset = 'pico_alvr' }
+    'quest-link' = @{ Path = 'profiles\starter-quest-link-lighthouse.json'; DevicePreset = 'quest_link' }
+    'p4-winner'  = @{ Path = 'profiles\example-quest-lighthouse.json'; DevicePreset = 'slam_tuned' }
 }
 
 if (-not $ProfilePath -and -not $Preset) {
@@ -26,11 +26,13 @@ if (-not $ProfilePath -and -not $Preset) {
     exit 0
 }
 
+$devicePresetId = $null
 if (-not $ProfilePath) {
     if (-not $presets.ContainsKey($Preset)) {
         Write-Error "Unknown preset '$Preset'. Valid: $($presets.Keys -join ', ')"
     }
-    $ProfilePath = Join-Path $repoRoot $presets[$Preset]
+    $ProfilePath = Join-Path $repoRoot $presets[$Preset].Path
+    $devicePresetId = $presets[$Preset].DevicePreset
 }
 
 if (-not (Test-Path $ProfilePath)) {
@@ -79,13 +81,27 @@ if ($useMerge) {
             $merged[$key] = $live[0].$key
         }
     }
+    if ($devicePresetId) {
+        $merged['device_preset'] = $devicePresetId
+    } elseif ($incoming[0].PSObject.Properties.Name -contains 'device_preset') {
+        $merged['device_preset'] = $incoming[0].device_preset
+    }
     $outChains = [System.Collections.Generic.List[object]]::new()
     $outChains.Add([pscustomobject]$merged)
     for ($i = 1; $i -lt $live.Count; $i++) { $outChains.Add($live[$i]) }
     $outJson = ($outChains.ToArray() | ConvertTo-Json -Depth 20 -Compress:$false)
     Write-Host "Merge import: tuning from $ProfilePath into live profile" -ForegroundColor Cyan
 } else {
-    $outJson = (Get-Content -Raw -Path $ProfilePath)
+    $incomingObj = @(Get-Content -Raw -Path $ProfilePath | ConvertFrom-Json)
+    if ($devicePresetId -and $incomingObj.Count -gt 0) {
+        $primary = @{}
+        foreach ($prop in $incomingObj[0].PSObject.Properties) { $primary[$prop.Name] = $prop.Value }
+        $primary['device_preset'] = $devicePresetId
+        $incomingObj[0] = [pscustomobject]$primary
+        $outJson = ($incomingObj | ConvertTo-Json -Depth 20 -Compress:$false)
+    } else {
+        $outJson = (Get-Content -Raw -Path $ProfilePath)
+    }
     Write-Host "Fresh import: $ProfilePath" -ForegroundColor Cyan
     Write-Host "  Placeholder serials — run room calibration in VR before expecting apply." -ForegroundColor DarkYellow
 }
