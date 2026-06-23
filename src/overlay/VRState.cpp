@@ -1,5 +1,8 @@
 #include "stdafx.h"
 #include "VRState.h"
+#include "Calibration.h"
+
+#include <algorithm>
 
 VRState VRState::Load()
 {
@@ -23,18 +26,14 @@ VRState VRState::Load()
 			{
 				std::string system(buffer);
 
-				// Check if the current HMD is a Pimax crystal
 				if (deviceClass == vr::TrackedDeviceClass_HMD && system == "aapvr") {
-					// HMD is a Pimax HMD
 					vr::HmdMatrix34_t eyeToHeadLeft = vr::VRSystem()->GetEyeToHeadTransform(vr::Eye_Left);
-					// Crystal's projection matrix is constant 0s or 1s except for [0][3], which stores the IPD offset from the nose
 					bool isCrystalHmd =
-						eyeToHeadLeft.m[0][0] == 1 && eyeToHeadLeft.m[0][1] == 0 && eyeToHeadLeft.m[0][2] == 0 &&                     // IPD
+						eyeToHeadLeft.m[0][0] == 1 && eyeToHeadLeft.m[0][1] == 0 && eyeToHeadLeft.m[0][2] == 0 &&
 						eyeToHeadLeft.m[1][0] == 0 && eyeToHeadLeft.m[1][1] == 1 && eyeToHeadLeft.m[1][2] == 0 && eyeToHeadLeft.m[1][3] == 0 &&
 						eyeToHeadLeft.m[2][0] == 0 && eyeToHeadLeft.m[2][1] == 0 && eyeToHeadLeft.m[2][2] == 1 && eyeToHeadLeft.m[2][3] == 0;
 
 					if (isCrystalHmd) {
-						// Move it outside the aapvr system ; we treat aapvr as if it were lighthouse
 						system = "Pimax Crystal HMD";
 					}
 				} else if (deviceClass == vr::TrackedDeviceClass_Controller && system == "oculus") {
@@ -43,7 +42,6 @@ VRState VRState::Load()
 					vr::VRSystem()->GetStringTrackedDeviceProperty(id, vr::Prop_ConnectedWirelessDongle_String, buffer, vr::k_unMaxPropertyStringSize, &err);
 					std::string connectedWirelessDongle(buffer);
 
-					// Check if the controller claims its an oculus controller but also pimax
 					if (renderModel.find("{aapvr}") != std::string::npos &&
 						renderModel.find("crystal") != std::string::npos &&
 						connectedWirelessDongle.find("lighthouse") != std::string::npos) {
@@ -90,8 +88,14 @@ VRState VRState::Load()
 	return state;
 }
 
+bool VRState::IsDeviceConnected(int deviceId) {
+	if (deviceId < 0 || !vr::VRSystem()) {
+		return false;
+	}
+	return vr::VRSystem()->GetTrackedDeviceClass(deviceId) != vr::TrackedDeviceClass_Invalid;
+}
+
 bool VRState::IsSlamTrackingSystem(const std::string& trackingSystem) {
-	// Inside-out SLAM HMDs: high baseline pose noise, IMU extrapolation, guardian drift.
 	return trackingSystem == "oculus"
 		|| trackingSystem == "holographic"
 		|| trackingSystem == "winmr"
@@ -100,28 +104,225 @@ bool VRState::IsSlamTrackingSystem(const std::string& trackingSystem) {
 		|| trackingSystem == "euler";
 }
 
+int VRState::ResolveStandbyDevice(
+	const StandbyDevice& standby,
+	const std::string& fallbackTrackingSystem
+) const {
+	if (standby.serial.empty() && standby.model.empty()) {
+		return -1;
+	}
+	const std::string& trackingSystem = !standby.trackingSystem.empty()
+		? standby.trackingSystem
+		: fallbackTrackingSystem;
+	if (trackingSystem.empty()) {
+		return -1;
+	}
+	return FindDevice(trackingSystem, standby.model, standby.serial);
+}
+
+namespace {
+	bool ModelsMatchQuestPro(const std::string& deviceModel, const std::string& wantedModel) {
+		if (deviceModel == wantedModel) {
+			return true;
+		}
+		if (wantedModel.find("Quest Pro") != std::string::npos
+			&& deviceModel.find("Quest Pro") != std::string::npos) {
+			return true;
+		}
+		if (wantedModel.find("Quest") != std::string::npos
+			&& deviceModel.find("Quest") != std::string::npos) {
+			return true;
+		}
+		return false;
+	}
+
+	bool SerialMatchesQuestLink(const std::string& deviceSerial, const std::string& wantedSerial) {
+		if (deviceSerial.empty() || wantedSerial.empty()) {
+			return false;
+		}
+		if (deviceSerial == wantedSerial) {
+			return true;
+		}
+		const bool deviceIsVrLink = deviceSerial.rfind("VRLINK", 0) == 0;
+		const bool wantedIsVrLink = wantedSerial.rfind("VRLINK", 0) == 0;
+		return deviceIsVrLink && wantedIsVrLink;
+	}
+}
+
+namespace {
+	const VRDevice* FindDeviceById(const VRState& state, int id) {
+		for (const auto& device : state.devices) {
+			if (device.id == id) {
+				return &device;
+			}
+		}
+		return nullptr;
+	}
+
+	void FillSlamReferenceMatchFromId(int id, SlamReferenceMatch& match) {
+		match.deviceId = id;
+		if (!vr::VRSystem() || id < 0) {
+			return;
+		}
+
+		char buffer[vr::k_unMaxPropertyStringSize] = {};
+		vr::ETrackedPropertyError err = vr::TrackedProp_Success;
+
+		vr::VRSystem()->GetStringTrackedDeviceProperty(
+			id, vr::Prop_TrackingSystemName_String, buffer, sizeof(buffer), &err);
+		if (err == vr::TrackedProp_Success) {
+			match.trackingSystem = buffer;
+		}
+
+		vr::VRSystem()->GetStringTrackedDeviceProperty(
+			id, vr::Prop_ModelNumber_String, buffer, sizeof(buffer), &err);
+		if (err == vr::TrackedProp_Success) {
+			match.model = buffer;
+		}
+
+		vr::VRSystem()->GetStringTrackedDeviceProperty(
+			id, vr::Prop_SerialNumber_String, buffer, sizeof(buffer), &err);
+		if (err == vr::TrackedProp_Success) {
+			match.serial = buffer;
+		}
+	}
+}
+
+SlamReferenceMatch VRState::ResolveSlamReference(
+	const StandbyDevice& standby,
+	const std::string& referenceTrackingSystem
+) const {
+	SlamReferenceMatch match;
+	int resolved = ResolveStandbyDevice(standby, referenceTrackingSystem);
+
+	if (resolved >= 0) {
+		const VRDevice* device = FindDeviceById(*this, resolved);
+		if (device != nullptr && device->deviceClass != vr::TrackedDeviceClass_HMD
+			&& (referenceTrackingSystem.empty() || IsSlamTrackingSystem(referenceTrackingSystem))) {
+			resolved = -1;
+		}
+	}
+
+	if (resolved < 0) {
+		resolved = FindSlamReferenceHmd(referenceTrackingSystem);
+	}
+	if (resolved < 0 && referenceTrackingSystem == "oculus") {
+		resolved = FindQuestProHmd();
+	}
+	if (resolved < 0) {
+		return match;
+	}
+
+	const VRDevice* device = FindDeviceById(*this, resolved);
+	if (device != nullptr) {
+		match.deviceId = device->id;
+		match.trackingSystem = device->trackingSystem;
+		match.model = device->model;
+		match.serial = device->serial;
+	} else {
+		FillSlamReferenceMatchFromId(resolved, match);
+	}
+
+	if (match.trackingSystem.empty() && !referenceTrackingSystem.empty()) {
+		match.trackingSystem = referenceTrackingSystem;
+	}
+
+	return match;
+}
+
+int VRState::FindSlamReferenceHmd(const std::string& preferredTrackingSystem) const {
+	int preferredId = -1;
+	int anySlamHmd = -1;
+
+	for (const auto& device : devices) {
+		if (device.deviceClass != vr::TrackedDeviceClass_HMD) {
+			continue;
+		}
+		if (!IsSlamTrackingSystem(device.trackingSystem)) {
+			continue;
+		}
+		if (anySlamHmd < 0) {
+			anySlamHmd = device.id;
+		}
+		if (!preferredTrackingSystem.empty() && device.trackingSystem == preferredTrackingSystem) {
+			preferredId = device.id;
+			break;
+		}
+	}
+
+	if (preferredId >= 0) {
+		return preferredId;
+	}
+	if (anySlamHmd >= 0) {
+		return anySlamHmd;
+	}
+
+	// OpenVR HMD index is usually 0; accept it when class/tracking system match.
+	if (vr::VRSystem()
+		&& vr::VRSystem()->GetTrackedDeviceClass(vr::k_unTrackedDeviceIndex_Hmd) == vr::TrackedDeviceClass_HMD) {
+		char buffer[vr::k_unMaxPropertyStringSize] = {};
+		vr::ETrackedPropertyError err = vr::TrackedProp_Success;
+		vr::VRSystem()->GetStringTrackedDeviceProperty(
+			vr::k_unTrackedDeviceIndex_Hmd,
+			vr::Prop_TrackingSystemName_String,
+			buffer,
+			sizeof(buffer),
+			&err);
+		if (err == vr::TrackedProp_Success && IsSlamTrackingSystem(buffer)) {
+			if (preferredTrackingSystem.empty() || preferredTrackingSystem == buffer) {
+				return vr::k_unTrackedDeviceIndex_Hmd;
+			}
+		}
+	}
+
+	return -1;
+}
+
+int VRState::FindQuestProHmd() const {
+	int fallbackOculusHmd = -1;
+	for (const auto& device : devices) {
+		if (device.deviceClass != vr::TrackedDeviceClass_HMD
+			|| device.trackingSystem != "oculus") {
+			continue;
+		}
+		if (device.model.find("Quest Pro") != std::string::npos) {
+			return device.id;
+		}
+		if (fallbackOculusHmd < 0) {
+			fallbackOculusHmd = device.id;
+		}
+	}
+	if (fallbackOculusHmd >= 0) {
+		return fallbackOculusHmd;
+	}
+	return FindSlamReferenceHmd("oculus");
+}
+
 int VRState::FindDevice(const std::string& trackingSystem, const std::string& model, const std::string& serial) const {
-	// Find the device with the matching tracking system, model and serial
 	for (int i = 0; i < devices.size(); i++) {
 		const auto& device = devices[i];
-		
+
 		uint8_t matches = 0;
 
-		if (device.model == model) {
-			matches++;
+		if (!model.empty()) {
+			if (device.deviceClass == vr::TrackedDeviceClass_HMD
+				&& device.trackingSystem == trackingSystem
+				&& ModelsMatchQuestPro(device.model, model)) {
+				matches++;
+			} else if (device.model == model) {
+				matches++;
+			}
 		}
-		if (device.serial == serial) {
-			matches++;
+		if (!serial.empty()) {
+			if (device.serial == serial) {
+				matches++;
+			} else if (device.deviceClass == vr::TrackedDeviceClass_HMD
+				&& device.trackingSystem == trackingSystem
+				&& SerialMatchesQuestLink(device.serial, serial)) {
+				matches++;
+			}
 		}
 
-		// Only return if:
-		//   - The tracking system is identical
-		//   - If the device is not a HMD, the model and serial number ALSO are identical.
-		//   - If the device is the HMD, the model OR serial number are also identical.
-		// 
-		// This handles an edge case of some device drivers being poorly developed or misbehaving, returning bad data to SteamVR and in turn, Space Calibrator
-		// e.g.   SteamLink sometimes reports the Quest Pro as either "Oculus Quest Pro" or "Oculus Quest2" as it's model string
-		//        It still reports the serial number correctly however as "VRLINKHMDQUESTPRO"!
 		if (device.trackingSystem == trackingSystem &&
 			((matches == 2 && device.deviceClass != vr::TrackedDeviceClass::TrackedDeviceClass_HMD) ||
 			(matches >= 1 && device.deviceClass == vr::TrackedDeviceClass::TrackedDeviceClass_HMD))) {

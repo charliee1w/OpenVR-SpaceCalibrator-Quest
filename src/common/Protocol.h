@@ -333,7 +333,8 @@ namespace protocol
 
 		bool GetPose(int index, vr::DriverPose_t& pose, LARGE_INTEGER *pSampleTime = NULL) {
 			ReadNewPoses([this](AugmentedPose const& pose) {
-				if (pose.pose.poseIsValid && pose.pose.result == vr::ETrackingResult::TrackingResult_Running_OK) {
+				if (pose.deviceId >= 0 && pose.deviceId < vr::k_unMaxTrackedDeviceCount
+					&& pose.pose.poseIsValid && pose.pose.result == vr::ETrackingResult::TrackingResult_Running_OK) {
 					this->lastPose[pose.deviceId] = pose;
 				}
 			});
@@ -343,10 +344,11 @@ namespace protocol
 				if (pSampleTime) *pSampleTime = lastPose[index].sample_time;
 				return true;
 			}
+			return false;
 		}
 
 		void SetPose(int index, const vr::DriverPose_t& pose) {
-			if (index >= vr::k_unMaxTrackedDeviceCount) return;
+			if (index < 0 || index >= vr::k_unMaxTrackedDeviceCount) return;
 			if (pData == nullptr) return;
 
 			AugmentedPose augPose = {0};

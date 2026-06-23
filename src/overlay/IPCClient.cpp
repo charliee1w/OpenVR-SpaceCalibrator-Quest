@@ -29,8 +29,29 @@ IPCClient::~IPCClient()
 		CloseHandle(pipe);
 }
 
+void IPCClient::Disconnect()
+{
+	if (pipe != INVALID_HANDLE_VALUE) {
+		CloseHandle(pipe);
+		pipe = INVALID_HANDLE_VALUE;
+	}
+}
+
+bool IPCClient::IsConnected() const
+{
+	return pipe != INVALID_HANDLE_VALUE;
+}
+
+void IPCClient::EnsureConnected()
+{
+	if (!IsConnected()) {
+		Connect();
+	}
+}
+
 void IPCClient::Connect()
 {
+	Disconnect();
 	LPCTSTR pipeName = TEXT(OPENVR_SPACECALIBRATOR_PIPE_NAME);
 
 	constexpr int kMaxAttempts = 30;
@@ -70,15 +91,28 @@ void IPCClient::Connect()
 
 protocol::Response IPCClient::SendBlocking(const protocol::Request &request)
 {
-	Send(request);
+	EnsureConnected();
+	if (!SendOnce(request)) {
+		Disconnect();
+		Connect();
+		if (!SendOnce(request)) {
+			DWORD lastError = GetLastError();
+			throw std::runtime_error("Error writing IPC request after reconnect. Error " + std::to_string(lastError) + ": " + LastErrorString(lastError));
+		}
+	}
 	return Receive();
+}
+
+bool IPCClient::SendOnce(const protocol::Request &request)
+{
+	DWORD bytesWritten;
+	BOOL success = WriteFile(pipe, &request, sizeof request, &bytesWritten, 0);
+	return success && bytesWritten == sizeof request;
 }
 
 void IPCClient::Send(const protocol::Request &request)
 {
-	DWORD bytesWritten;
-	BOOL success = WriteFile(pipe, &request, sizeof request, &bytesWritten, 0);
-	if (!success)
+	if (!SendOnce(request))
 	{
 		DWORD lastError = GetLastError();
 		throw std::runtime_error("Error writing IPC request. Error " + std::to_string(lastError) + ": " + LastErrorString(lastError));

@@ -1,6 +1,5 @@
 #include "stdafx.h"
 #include "UserInterface.h"
-#include "CalibrationChain.h"
 #include "Calibration.h"
 #include "Configuration.h"
 #include "VRState.h"
@@ -12,8 +11,8 @@
 #include <vector>
 #include <algorithm>
 #include <imgui/imgui.h>
-#include <imgui/imgui_internal.h>
 #include "imgui_extensions.h"
+#include "ui_theme.h"
 
 void TextWithWidth(const char *label, const char *text, float width);
 void DrawVectorElement(const std::string id, const char* text, double* value, int defaultValue = 0, const char* defaultValueStr = " 0 ");
@@ -33,7 +32,6 @@ static const ImGuiWindowFlags bareWindowFlags =
 	ImGuiWindowFlags_NoCollapse;
 
 void BuildContinuousCalDisplay();
-void BuildCalibrationProgressModal(bool runningInOverlay);
 void ShowVersionLine();
 
 static bool runningInOverlay;
@@ -69,8 +67,6 @@ void BuildMainWindow(bool runningInOverlay_)
 		BuildMenu(runningInOverlay);
 	}
 
-	BuildCalibrationProgressModal(runningInOverlay);
-
 	ShowVersionLine();
 
 	ImGui::PopStyleColor();
@@ -84,10 +80,16 @@ void ShowVersionLine() {
 		return;
 	}
 	ImGui::Text("Space Calibrator v" SPACECAL_VERSION_STRING);
+	ImGui::SameLine();
+	if (Driver.IsConnected()) {
+		ImGui::TextColored(SpaceCalUI::StatusOk(), "| driver connected");
+	} else {
+		ImGui::TextColored(SpaceCalUI::StatusError(), "| driver offline");
+	}
 	if (runningInOverlay)
 	{
 		ImGui::SameLine();
-		ImGui::Text("- close VR overlay to use mouse");
+		ImGui::TextDisabled("| close VR overlay to use mouse");
 	}
 	ImGui::EndChild();
 }
@@ -306,6 +308,103 @@ void CCal_DrawSettings() {
 			}
 			ImGui::PopID();
 
+			// Quest SLAM / Guardian settings (fork additions for Quest SLAM + lighthouse)
+			{
+				ImVec2 panel_size_inner { panel_size.x - 11 * 2, 0};
+				ImGui::BeginGroupPanel("Quest SLAM / Guardian settings", panel_size_inner);
+
+				ImGui::Checkbox("Chaperone auto apply (stored)", &CalCtx.chaperone.autoApply);
+				ImGui::SameLine();
+
+				// Spike threshold
+				ImGui::Text("Spike threshold (m)");
+				ImGui::SameLine();
+				ImGui::PushID("spike_threshold");
+				ImGui::SliderFloat("##spike_threshold_slider", &CalCtx.continuousSpikeThresholdM, 0.01f, 0.2f, "%.3f", 0);
+				if (ImGui::IsItemHovered(0)) {
+					ImGui::SetTooltip("Base spike rejection threshold for continuous samples.\nHigher for jittery SLAM refs; auto-scaled by jitter.");
+				}
+				ImGui::PopID();
+
+				// Frozen threshold
+				ImGui::Text("Frozen frame threshold");
+				ImGui::SameLine();
+				ImGui::PushID("frozen_threshold");
+				int frozen = CalCtx.continuousFrozenFrameThreshold;
+				if (ImGui::SliderInt("##frozen_slider", &frozen, 1, 20)) {
+					CalCtx.continuousFrozenFrameThreshold = frozen;
+				}
+				if (ImGui::IsItemHovered(0)) {
+					ImGui::SetTooltip("Frames with no movement before considering ref frozen (skips in cont cal for SLAM).");
+				}
+				ImGui::PopID();
+
+				// Checkboxes row 1
+				ImGui::Checkbox("Pause on ref jitter", &CalCtx.pauseOnReferenceJitter);
+				ImGui::SameLine();
+				ImGui::Checkbox("Apply head model to ref", &CalCtx.applyHeadModelToReference);
+				ImGui::Checkbox("Reject yaw drift poses", &CalCtx.rejectYawDriftPoses);
+				ImGui::SameLine();
+				ImGui::Checkbox("Trust target yaw", &CalCtx.trustTargetYaw);
+
+				// Checkboxes row 2
+				ImGui::Checkbox("Compensate pose time offset", &CalCtx.compensatePoseTimeOffset);
+				ImGui::SameLine();
+				ImGui::Checkbox("Auto recal on guardian drift", &CalCtx.autoRecalOnGuardianDrift);
+
+				// Time params
+				ImGui::Text("Max ref pose time offset (s)");
+				ImGui::SameLine();
+				ImGui::PushID("max_ref_time");
+				ImGui::SliderFloat("##max_ref_time_slider", &CalCtx.maxReferencePoseTimeOffset, 0.01f, 0.2f, "%.3f", 0);
+				ImGui::PopID();
+
+				ImGui::Text("Max pose time skew (s)");
+				ImGui::SameLine();
+				ImGui::PushID("max_skew");
+				ImGui::SliderFloat("##max_skew_slider", &CalCtx.maxPoseTimeSkew, 0.01f, 0.2f, "%.3f", 0);
+				if (ImGui::IsItemHovered(0)) {
+					ImGui::SetTooltip("Relaxed in cont cal for SLAM+VD timestamp skew between ref and target.");
+				}
+				ImGui::PopID();
+
+				// Guardian drift sub
+				ImGui::Text("Guardian drift trans thresh (m)");
+				ImGui::SameLine();
+				ImGui::PushID("g_trans");
+				ImGui::SliderFloat("##g_trans_slider", &CalCtx.guardianDriftTransThresholdM, 0.01f, 0.1f, "%.3f", 0);
+				ImGui::PopID();
+
+				ImGui::Text("Guardian drift yaw thresh (deg)");
+				ImGui::SameLine();
+				ImGui::PushID("g_yaw");
+				float yawDeg = CalCtx.guardianDriftYawThresholdRad * 180.0f / EIGEN_PI;
+				if (ImGui::SliderFloat("##g_yaw_slider", &yawDeg, 1.0f, 20.0f, "%.1f", 0)) {
+					CalCtx.guardianDriftYawThresholdRad = yawDeg * EIGEN_PI / 180.0f;
+				}
+				ImGui::PopID();
+
+				ImGui::Text("Guardian confirm checks");
+				ImGui::SameLine();
+				ImGui::PushID("g_confirm");
+				int confirms = CalCtx.guardianDriftConfirmChecks;
+				if (ImGui::SliderInt("##g_confirm_slider", &confirms, 1, 10)) {
+					CalCtx.guardianDriftConfirmChecks = confirms;
+				}
+				ImGui::PopID();
+
+				ImGui::Text("Guardian cooldown frames");
+				ImGui::SameLine();
+				ImGui::PushID("g_cooldown");
+				int cooldown = CalCtx.guardianDriftCooldownFrames;
+				if (ImGui::SliderInt("##g_cooldown_slider", &cooldown, 10, 120)) {
+					CalCtx.guardianDriftCooldownFrames = cooldown;
+				}
+				ImGui::PopID();
+
+				ImGui::EndGroupPanel();
+			}
+
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			ImGui::TextWrapped("Controls how often SpaceCalibrator synchronises playspaces.");
 			ImGui::PopStyleColor();
@@ -330,7 +429,7 @@ void CCal_DrawSettings() {
 			// Playspace offset
 			ImVec2 panel_size_inner{ panel_size.x - 11 * 2, 0 };
 			ImGui::BeginGroupPanel("Playspace scale", panel_size_inner);
-			DrawVectorElement("cc_playspace_scale", "PLayspace Scale", &CalCtx.calibratedScale, 1, " 1 ");
+			DrawVectorElement("cc_playspace_scale", "Playspace Scale", &CalCtx.calibratedScale, 1, " 1 ");
 			ImGui::EndGroupPanel();
 		}
 
@@ -396,7 +495,69 @@ inline const char* GetPrettyTrackingSystemName(const std::string& value) {
 	return value.c_str();
 }
 
+static void SetStatusCellBg(const ImVec4& color) {
+	ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, SpaceCalUI::ColorToU32(color, 0.35f));
+}
+
+static void DrawProfileStatusBanner() {
+	if (!Driver.IsConnected()) {
+		ImGui::TextColored(SpaceCalUI::StatusError(),
+			"Driver not connected — restart SteamVR after running deploy.ps1");
+		ImGui::Spacing();
+		return;
+	}
+
+	if (!CalCtx.validProfile) {
+		ImGui::TextColored(SpaceCalUI::StatusIdle(),
+			"No saved profile — run one-shot calibration to merge playspaces");
+		ImGui::Spacing();
+		return;
+	}
+
+	if (CalCtx.enabled) {
+		ImGui::TextColored(SpaceCalUI::StatusOk(),
+			"Offsets active: %s aligned to %s",
+			GetPrettyTrackingSystemName(CalCtx.targetTrackingSystem),
+			GetPrettyTrackingSystemName(CalCtx.referenceTrackingSystem));
+	} else if (CalCtx.referenceID < 0) {
+		ImGui::TextColored(SpaceCalUI::StatusWarn(),
+			"Profile saved — reference device (%s) not detected",
+			GetPrettyTrackingSystemName(CalCtx.referenceTrackingSystem));
+	} else {
+		ImGui::TextColored(SpaceCalUI::StatusWarn(),
+			"Profile saved — HMD tracking system mismatch (expected %s)",
+			GetPrettyTrackingSystemName(CalCtx.referenceTrackingSystem));
+	}
+
+	if (CalCtx.slamReference) {
+		ImGui::TextDisabled("Quest SLAM reference — VD latency preset applies during calibration");
+	}
+	if (!CalCtx.steamVrPathOk && !CalCtx.steamVrPathWarning.empty()) {
+		ImGui::TextColored(SpaceCalUI::StatusWarn(), "%s", CalCtx.steamVrPathWarning.c_str());
+		ImGui::TextDisabled("VD Settings: OpenXR runtime -> SteamVR (not VDXR)");
+	}
+
+	ImGui::Spacing();
+}
+
 void CCal_BasicInfo() {
+	if (CalCtx.enabled) {
+		ImGui::TextColored(SpaceCalUI::StatusOk(), "Offsets active");
+	} else if (CalCtx.validProfile) {
+		ImGui::TextColored(SpaceCalUI::StatusWarn(), "Saved profile loaded — waiting to apply");
+	}
+	if (CalCtx.lastLiveErrorCurrentCalMm > 0.f || CalCtx.lastLiveErrorByRelPoseMm > 0.f) {
+		const ImVec4 errColor = CalCtx.lastLiveErrorCurrentCalMm > 50.f
+			? SpaceCalUI::StatusWarn()
+			: SpaceCalUI::StatusIdle();
+		ImGui::TextColored(errColor, "Live error: applied %.0f mm | rel-pose %.0f mm",
+			CalCtx.lastLiveErrorCurrentCalMm, CalCtx.lastLiveErrorByRelPoseMm);
+		if (CalCtx.lastLiveErrorCurrentCalMm > 25.f && CalCtx.lockRelativePosition) {
+			ImGui::TextDisabled("High applied drift — lock-relative or diverged recovery will attempt a bounded correction");
+		}
+	}
+	ImGui::Spacing();
+
 	if (ImGui::BeginTable("DeviceInfo", 2, 0)) {
 		ImGui::TableSetupColumn("Reference device");
 		ImGui::TableSetupColumn("Target device");
@@ -415,10 +576,10 @@ void CCal_BasicInfo() {
 		);
 		const char* status;
 		if (CalCtx.referenceID < 0) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFF000080);
+			SetStatusCellBg(SpaceCalUI::StatusError());
 			status = "NOT FOUND";
 		} else if (!CalCtx.ReferencePoseIsValidSimple()) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFFFF0080);
+			SetStatusCellBg(SpaceCalUI::StatusWarn());
 			status = "NOT TRACKING";
 		} else {
 			status = "OK";
@@ -434,11 +595,11 @@ void CCal_BasicInfo() {
 			CalCtx.targetStandby.serial.c_str()
 		);
 		if (CalCtx.targetID < 0) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFF000080);
+			SetStatusCellBg(SpaceCalUI::StatusError());
 			status = "NOT FOUND";
 		}
 		else if (!CalCtx.TargetPoseIsValidSimple()) {
-			ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, 0xFFFF0080);
+			SetStatusCellBg(SpaceCalUI::StatusWarn());
 			status = "NOT TRACKING";
 		}
 		else {
@@ -474,25 +635,35 @@ void CCal_BasicInfo() {
 		ImGui::EndTable();
 	}
 
-	if (CalChains.size() > 1) {
-		ImGui::Text("Multi-platform chains active: %zu", CalChains.size());
-		for (size_t i = 0; i < CalChains.size(); i++) {
-			const auto& chain = CalChains[i];
-			ImGui::TextDisabled("  [%zu] %s -> %s%s",
-				i,
-				chain.referenceTrackingSystem.c_str(),
-				chain.targetTrackingSystem.c_str(),
-				chain.continuousActive ? " (cont)" : "");
-		}
-	}
-
 	ImGui::Checkbox("Hide tracker", &CalCtx.quashTargetInContinuous);
 	ImGui::SameLine();
-	ImGui::Checkbox("Static recalibration", &CalCtx.enableStaticRecalibration);
+	if (ImGui::Checkbox("Lock relative transform", &CalCtx.lockRelativePosition)) {
+		if (CalCtx.lockRelativePosition) {
+			CalCtx.enableStaticRecalibration = false;
+		}
+	}
+	if (ImGui::IsItemHovered()) {
+		ImGui::SetTooltip("Quest/VD default: refine the saved one-shot profile using relative pose.\nMutually exclusive with static recalibration.");
+	}
+	ImGui::SameLine();
+	if (CalCtx.lockRelativePosition) {
+		ImGui::BeginDisabled();
+	}
+	if (ImGui::Checkbox("Static recalibration", &CalCtx.enableStaticRecalibration)) {
+		if (CalCtx.enableStaticRecalibration) {
+			CalCtx.lockRelativePosition = false;
+		}
+	}
+	if (CalCtx.lockRelativePosition) {
+		ImGui::EndDisabled();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			ImGui::SetTooltip("Turn off lock relative to use static recalibration instead.");
+		}
+	} else if (ImGui::IsItemHovered()) {
+		ImGui::SetTooltip("Alternative continuous refinement path when lock relative is off.");
+	}
 	ImGui::SameLine();
 	ImGui::Checkbox("Enable debug logs", &Metrics::enableLogs);
-	ImGui::SameLine();
-	ImGui::Checkbox("Lock relative transform", &CalCtx.lockRelativePosition);
 	ImGui::SameLine();
 	ImGui::Checkbox("Require triggers", &CalCtx.requireTriggerPressToApply);
 	ImGui::Checkbox("Ignore outliers", &CalCtx.ignoreOutliers);
@@ -520,11 +691,7 @@ void BuildMenu(bool runningInOverlay)
 
 	if (CalCtx.state == CalibrationState::None)
 	{
-		if (CalCtx.validProfile && !CalCtx.enabled)
-		{
-			ImGui::TextColored(ImVec4(0.8f, 0.2f, 0.2f, 1), "Reference (%s) HMD not detected, profile disabled", GetPrettyTrackingSystemName(CalCtx.referenceTrackingSystem));
-			ImGui::Text("");
-		}
+		DrawProfileStatusBanner();
 
 		float width = ImGui::GetWindowContentRegionWidth(), scale = 1.0f;
 		if (CalCtx.validProfile)
@@ -533,15 +700,24 @@ void BuildMenu(bool runningInOverlay)
 			scale = 1.0f / 4.0f;
 		}
 
-		if (ImGui::Button("Start Calibration", ImVec2(width * scale, ImGui::GetTextLineHeight() * 2)))
+		if (SpaceCalUI::PrimaryButton("Start Calibration", ImVec2(width * scale, ImGui::GetTextLineHeight() * 2)))
 		{
 			ImGui::OpenPopup("Calibration Progress");
 			StartCalibration();
 		}
 
 		ImGui::SameLine();
+		if (!CalCtx.validProfile) {
+			ImGui::BeginDisabled();
+		}
 		if (ImGui::Button("Continuous Calibration", ImVec2(width * scale, ImGui::GetTextLineHeight() * 2))) {
 			StartContinuousCalibration();
+		}
+		if (!CalCtx.validProfile) {
+			ImGui::EndDisabled();
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+				ImGui::SetTooltip("Run one-shot calibration first to create a saved profile");
+			}
 		}
 
 		if (CalCtx.validProfile)
@@ -553,7 +729,7 @@ void BuildMenu(bool runningInOverlay)
 			}
 
 			ImGui::SameLine();
-			if (ImGui::Button("Clear Calibration", ImVec2(width * scale, ImGui::GetTextLineHeight() * 2)))
+			if (SpaceCalUI::DangerButton("Clear Calibration", ImVec2(width * scale, ImGui::GetTextLineHeight() * 2)))
 			{
 				CalCtx.Clear();
 				SaveProfile(CalCtx);
@@ -624,76 +800,34 @@ void BuildMenu(bool runningInOverlay)
 		ImGui::Button("Calibration in progress...", ImVec2(ImGui::GetWindowContentRegionWidth(), ImGui::GetTextLineHeight() * 2));
 	}
 
-}
-
-void BuildCalibrationProgressModal(bool runningInOverlay)
-{
-	if (CalCtx.state == CalibrationState::Continuous || CalCtx.state == CalibrationState::ContinuousStandby) {
-		if (ImGui::IsPopupOpen("Calibration Progress", ImGuiPopupFlags_AnyPopupId)) {
-			ImGui::ClosePopupToLevel(0, true);
-		}
-		return;
-	}
-
-	auto &io = ImGui::GetIO();
-	ImGuiStyle &style = ImGui::GetStyle();
-
-	const ImGuiWindowFlags calModalFlags =
-		(bareWindowFlags & ~ImGuiWindowFlags_NoScrollWithMouse) | ImGuiWindowFlags_NoScrollbar;
-
 	ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x - 40.0f, io.DisplaySize.y - 40.0f), ImGuiCond_Always);
-	if (ImGui::BeginPopupModal("Calibration Progress", nullptr, calModalFlags))
+	if (ImGui::BeginPopupModal("Calibration Progress", nullptr, bareWindowFlags))
 	{
-		static double calModalDoneTime = 0.0;
-		const bool calFinished = CalCtx.state == CalibrationState::None;
-		const float footerHeight = ImGui::GetTextLineHeight() * 2.8f + style.ItemSpacing.y * 2.0f;
-
-		if (calFinished) {
-			if (calModalDoneTime <= 0.0) {
-				calModalDoneTime = ImGui::GetTime();
-			}
-		} else {
-			calModalDoneTime = 0.0;
-		}
-
-		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 1));
-		if (ImGui::BeginChild("cal_progress_messages", ImVec2(0.0f, -footerHeight), ImGuiChildFlags_Borders)) {
-			for (auto &message : CalCtx.messages)
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImVec4(0, 0, 0, 1));
+		for (auto &message : CalCtx.messages)
+		{
+			switch (message.type)
 			{
-				switch (message.type)
-				{
-				case CalibrationContext::Message::String:
-					ImGui::TextWrapped("%s", message.str.c_str());
-					break;
-				case CalibrationContext::Message::Progress:
-				{
-					float fraction = (float)message.progress / (float)message.target;
-					ImGui::Spacing();
-					ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), "");
-					ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetFontSize() - style.FramePadding.y * 2);
-					ImGui::Text(" %d%%", (int)(fraction * 100));
-					break;
-				}
-				}
+			case CalibrationContext::Message::String:
+				ImGui::TextWrapped(message.str.c_str());
+				break;
+			case CalibrationContext::Message::Progress:
+				float fraction = (float)message.progress / (float)message.target;
+				ImGui::Text("");
+				ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), "");
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetFontSize() - style.FramePadding.y * 2);
+				ImGui::Text(" %d%%", (int)(fraction * 100));
+				break;
 			}
 		}
-		ImGui::EndChild();
 		ImGui::PopStyleColor();
 
-		if (calFinished)
+		if (CalCtx.state == CalibrationState::None)
 		{
-			if (runningInOverlay) {
-				ImGui::TextDisabled("Calibration finished. Close below, or it will dismiss automatically.");
-			}
-			if (ImGui::Button("Close", ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight() * 2.2f))) {
+			ImGui::Text("");
+			if (ImGui::Button("Close", ImVec2(ImGui::GetWindowContentRegionWidth(), ImGui::GetTextLineHeight() * 2)))
 				ImGui::CloseCurrentPopup();
-				calModalDoneTime = 0.0;
-			}
-			if (runningInOverlay && calModalDoneTime > 0.0 && ImGui::GetTime() - calModalDoneTime > 2.0) {
-				ImGui::CloseCurrentPopup();
-				calModalDoneTime = 0.0;
-			}
 		}
 
 		ImGui::EndPopup();
@@ -831,7 +965,12 @@ std::string LabelString(const StandbyDevice& device) {
 	return label;
 }
 
-void BuildDeviceSelection(const VRState &state, int &initialSelected, const std::string &system, StandbyDevice &standbyDevice)
+void BuildDeviceSelection(
+	const VRState &state,
+	int &initialSelected,
+	const std::string &system,
+	StandbyDevice &standbyDevice,
+	bool preferHmdForAutoSelect = false)
 {
 	int selected = initialSelected;
 	ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "Devices from: %s", GetPrettyTrackingSystemName(system));
@@ -862,15 +1001,29 @@ void BuildDeviceSelection(const VRState &state, int &initialSelected, const std:
 
 	if (selected == -1 && !standby)
 	{
-		for (auto &device : state.devices)
-		{
-			if (device.trackingSystem != system)
-				continue;
+		if (preferHmdForAutoSelect) {
+			for (const auto& device : state.devices) {
+				if (device.trackingSystem != system) {
+					continue;
+				}
+				if (device.deviceClass == vr::TrackedDeviceClass_HMD) {
+					selected = device.id;
+					break;
+				}
+			}
+		}
 
-			if (device.controllerRole == vr::TrackedControllerRole_LeftHand)
+		if (selected == -1) {
+			for (auto &device : state.devices)
 			{
-				selected = device.id;
-				break;
+				if (device.trackingSystem != system)
+					continue;
+
+				if (device.controllerRole == vr::TrackedControllerRole_LeftHand)
+				{
+					selected = device.id;
+					break;
+				}
 			}
 		}
 
@@ -944,13 +1097,13 @@ void BuildDeviceSelections(const VRState &state)
 	ImVec2 paneSize(ImGui::GetWindowContentRegionWidth() / 2 - style.FramePadding.x, ImGui::GetTextLineHeightWithSpacing() * 5 + style.ItemSpacing.y * 4);
 
 	ImGui::BeginChild("left device pane", paneSize, ImGuiChildFlags_Borders);
-	BuildDeviceSelection(state, CalCtx.referenceID, CalCtx.referenceTrackingSystem, CalCtx.referenceStandby);
+	BuildDeviceSelection(state, CalCtx.referenceID, CalCtx.referenceTrackingSystem, CalCtx.referenceStandby, true);
 	ImGui::EndChild();
 
 	ImGui::SameLine();
 
 	ImGui::BeginChild("right device pane", paneSize, ImGuiChildFlags_Borders);
-	BuildDeviceSelection(state, CalCtx.targetID, CalCtx.targetTrackingSystem, CalCtx.targetStandby);
+	BuildDeviceSelection(state, CalCtx.targetID, CalCtx.targetTrackingSystem, CalCtx.targetStandby, false);
 	ImGui::EndChild();
 
 	if (ImGui::Button("Identify selected devices (blinks LED or vibrates)", ImVec2(ImGui::GetWindowContentRegionWidth(), ImGui::GetTextLineHeightWithSpacing() + 4.0f)))

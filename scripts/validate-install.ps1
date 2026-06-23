@@ -42,7 +42,7 @@ if ((Test-Path $overlayDll) -and (Test-Path $driverDll)) {
 
 $loadedVer = $null
 if (Test-Path $driverLog) {
-    $loadedVer = Select-String -Path $driverLog -Pattern 'OpenVR-SpaceCalibratorDriver\s+([\d.]+-gore-contcal\d+)\s+loaded' |
+    $loadedVer = Select-String -Path $driverLog -Pattern 'OpenVR-SpaceCalibratorDriver\s+(\S+)\s+loaded' |
         Select-Object -Last 1 | ForEach-Object { $_.Matches.Groups[1].Value }
 }
 if ($loadedVer) {

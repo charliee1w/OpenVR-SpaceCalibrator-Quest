@@ -1,8 +1,9 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "Calibration.h"
 #include "Configuration.h"
 #include "EmbeddedFiles.h"
 #include "UserInterface.h"
+#include "ui_theme.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -35,8 +36,6 @@ std::string c_SPACE_CALIBRATOR_STEAM_APP_ID = "3368750";
 std::string c_STEAMVR_STEAM_APP_ID = "250820";
 constexpr const char* STEAM_MUTEX_KEY = "Global\\MUTEX__SpaceCalibrator_Steam";
 HANDLE hSteamMutex = INVALID_HANDLE_VALUE;
-bool s_isGitHubVersionInstalled = false;
-
 extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
 extern "C" __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 0x00000001;
 
@@ -160,7 +159,7 @@ void CreateGLFWWindow()
 	ImGui_ImplGlfw_InitForOpenGL(glfwWindow, true);
 	ImGui_ImplOpenGL3_Init("#version 330");
 
-	ImGui::StyleColorsDark();
+	SpaceCalUI::ApplyTheme();
 
 	glGenTextures(1, &fboTextureHandle);
 	glBindTexture(GL_TEXTURE_2D, fboTextureHandle);
@@ -260,78 +259,15 @@ void InitVR()
 static char textBuf[0x400] = {};
 
 static bool immediateRedraw;
-void RequestImmediateRedraw() {
-	immediateRedraw = true;
+static double lastDashboardInteractionTime = 0;
+
+static void NoteDashboardInteraction() {
+	lastDashboardInteractionTime = glfwGetTime();
 }
 
-bool UninstallGithubSpaceCalibrator() {
-
-	// find the uninstall key
-
-	// HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenVRSpaceCalibrator
-	std::string uninstallKeyValue = GetRegistryString(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenVRSpaceCalibrator", "UninstallString");
-	if (uninstallKeyValue.empty()) {
-		// HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\OpenVRSpaceCalibrator
-		uninstallKeyValue = GetRegistryString(HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenVRSpaceCalibrator", "UninstallString");
-		if (uninstallKeyValue.empty()) {
-			// HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall
-			uninstallKeyValue = GetRegistryString(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenVRSpaceCalibrator", "UninstallString");
-		}
-	}
-
-	printf("uninst: %s\n", uninstallKeyValue.c_str());
-
-	if (!uninstallKeyValue.empty()) {
-
-		int size_needed = MultiByteToWideChar(CP_UTF8, 0, &uninstallKeyValue[0], (int)uninstallKeyValue.size(), 0, 0);
-		std::wstring uninstallPathUnicode(size_needed, 0);
-		MultiByteToWideChar(CP_UTF8, 0, &uninstallKeyValue[0], (int)uninstallKeyValue.size(), &uninstallPathUnicode[0], size_needed);
-
-		// split uninstall key into file and cli args
-		std::wstring executablePath = uninstallPathUnicode;
-		std::wstring commandLineArgs = uninstallPathUnicode;
-
-		// some form of parsing incase a fork changes the executable path and stuff
-		if (executablePath[0] == L'"') {
-			// executable name is wrapped in double quotes, find closing quote
-			auto it = std::find(executablePath.begin(), executablePath.end(), '"');
-			it = std::find(it + 1, executablePath.end(), '"');
-			if (it != executablePath.end()) {
-				size_t idx = it - executablePath.begin();
-				// now that we know where the quotes are, substring
-				executablePath = uninstallPathUnicode.substr(1, idx - 1);
-				commandLineArgs = uninstallPathUnicode.substr(idx + 1);
-			}
-		} else {
-			// executable name is until the first space, find it and split accordingly
-			auto it = std::find(executablePath.begin(), executablePath.end(), ' ');
-			if (it != executablePath.end()) {
-				size_t idx = it - executablePath.begin();
-				// now that we know where the quotes are, substring
-				executablePath = uninstallPathUnicode.substr(1, idx - 1);
-				commandLineArgs = uninstallPathUnicode.substr(idx);
-			}
-		}
-
-		SHELLEXECUTEINFO shExInfo = { 0 };
-		shExInfo.cbSize = sizeof(shExInfo);
-		shExInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
-		shExInfo.hwnd = 0;
-		shExInfo.lpVerb = L"open";
-		shExInfo.lpFile = L"ms-settings:appsfeatures";
-		shExInfo.lpParameters = L"";
-		shExInfo.lpDirectory = 0;
-		shExInfo.nShow = SW_SHOW;
-		shExInfo.hInstApp = 0;
-
-		if (ShellExecuteExW(&shExInfo))
-		{
-			// valid
-			return true;
-		}
-	}
-
-	return false;
+void RequestImmediateRedraw() {
+	immediateRedraw = true;
+	NoteDashboardInteraction();
 }
 
 double lastFrameStartTime = glfwGetTime();
@@ -342,15 +278,33 @@ void RunLoop() {
 		double time = glfwGetTime();
 		CalibrationTick(time);
 
-		bool dashboardVisible = false;
 		int width, height;
 		glfwGetFramebufferSize(glfwWindow, &width, &height);
 		const bool windowVisible = (width > 0 && height > 0);
+		const bool iconified = glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED) != 0;
 
-		if (overlayMainHandle && vr::VROverlay())
+		bool dashboardVisible = false;
+		if (overlayMainHandle && vr::VROverlay()) {
+			dashboardVisible = vr::VROverlay()->IsActiveDashboardOverlay(overlayMainHandle);
+		}
+
+		const bool shouldRender = dashboardVisible || (windowVisible && !iconified);
+
+		// Toggle overlay input method so that when the desktop GLFW window is the active one,
+		// the native mouse can interact with ImGui (instead of being routed to the VR overlay).
+		if (overlayMainHandle) {
+			static bool lastWantDesktopMouse = false;
+			const bool wantDesktopMouse = windowVisible && !dashboardVisible;
+			if (wantDesktopMouse != lastWantDesktopMouse) {
+				vr::VROverlay()->SetOverlayInputMethod(overlayMainHandle,
+					wantDesktopMouse ? vr::VROverlayInputMethod_None : vr::VROverlayInputMethod_Mouse);
+				lastWantDesktopMouse = wantDesktopMouse;
+			}
+		}
+
+		if (dashboardVisible && overlayMainHandle && vr::VROverlay())
 		{
 			auto &io = ImGui::GetIO();
-			dashboardVisible = vr::VROverlay()->IsActiveDashboardOverlay(overlayMainHandle);
 
 			static bool keyboardOpen = false, keyboardJustClosed = false;
 
@@ -397,18 +351,22 @@ void RunLoop() {
 				switch (vrEvent.eventType) {
 				case vr::VREvent_MouseMove:
 					io.AddMousePosEvent(vrEvent.data.mouse.x, vrEvent.data.mouse.y);
+					NoteDashboardInteraction();
 					break;
 				case vr::VREvent_MouseButtonDown:
 					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, true);
+					NoteDashboardInteraction();
 					break;
 				case vr::VREvent_MouseButtonUp:
 					io.AddMouseButtonEvent((vrEvent.data.mouse.button & vr::VRMouseButton_Left) == vr::VRMouseButton_Left ? 0 : 1, false);
+					NoteDashboardInteraction();
 					break;
 				case vr::VREvent_ScrollDiscrete:
 				{
 					float x = vrEvent.data.scroll.xdelta * 360.0f * 8.0f;
 					float y = vrEvent.data.scroll.ydelta * 360.0f * 8.0f;
 					io.AddMouseWheelEvent(x, y);
+					NoteDashboardInteraction();
 					break;
 				}
 				case vr::VREvent_KeyboardDone: {
@@ -416,12 +374,14 @@ void RunLoop() {
 
 					int id = ImGui::GetActiveID();
 					auto textInfo = ImGui::GetInputTextState(id);
-					int bufSize = MultiByteToWideChar(CP_UTF8, 0, textBuf, -1, nullptr, 0);
-					textInfo->TextA.resize(bufSize);
-					MultiByteToWideChar(CP_UTF8, 0, textBuf, -1, (LPWSTR)textInfo->TextA.Data, bufSize);
-					textInfo->CurLenA = bufSize;
-					textInfo->CurLenA = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, nullptr, 0, nullptr, nullptr);
-					
+					if (textInfo != nullptr) {
+						int bufSize = MultiByteToWideChar(CP_UTF8, 0, textBuf, -1, nullptr, 0);
+						textInfo->TextA.resize(bufSize);
+						MultiByteToWideChar(CP_UTF8, 0, textBuf, -1, (LPWSTR)textInfo->TextA.Data, bufSize);
+						textInfo->CurLenA = bufSize;
+						textInfo->CurLenA = WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)textInfo->TextA.Data, textInfo->TextA.Size, nullptr, 0, nullptr, nullptr);
+					}
+
 					keyboardJustClosed = true;
 					break;
 				}
@@ -430,51 +390,29 @@ void RunLoop() {
 				}
 			}
 		}
-		
-		if (windowVisible || dashboardVisible)
+
+		if (shouldRender)
 		{
-			auto &io = ImGui::GetIO();
-			
-			// These change state now, so we must execute these before doing our own modifications to the io state for VR
+			// UI render settings from pushrax (not the UI layout/content itself):
+			// - Set DisplaySize to virtual fbo
+			// - SetReadMouseFromGlfw to separate desktop GLFW mouse vs VR overlay input
+			// - Order of NewFrame calls
+			ImGui::GetIO().DisplaySize = ImVec2((float)fboTextureWidth, (float)fboTextureHeight);
+
+			ImGui_ImplGlfw_SetReadMouseFromGlfw(!dashboardVisible);
 			ImGui_ImplOpenGL3_NewFrame();
 			ImGui_ImplGlfw_NewFrame();
 
-			io.DisplaySize = ImVec2((float)fboTextureWidth, (float)fboTextureHeight);
-			io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
-
-			io.ConfigFlags = io.ConfigFlags & ~ImGuiConfigFlags_NoMouseCursorChange;
-			if (dashboardVisible) {
-				io.ConfigFlags = io.ConfigFlags | ImGuiConfigFlags_NoMouseCursorChange;
-			}
+			// re-apply fbo size (fork keeps fixed virtual resolution for layout consistency across dpi/window sizes)
+			ImGui::GetIO().DisplaySize = ImVec2((float)fboTextureWidth, (float)fboTextureHeight);
+			ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
 
 			ImGui::NewFrame();
 
 			BuildMainWindow(dashboardVisible);
 
-			// @TODO: Move to a separate function, for now it works
-			static bool githubPopupDismissed = false;
-
-			if (s_isGitHubVersionInstalled && !githubPopupDismissed) {
-				ImGui::OpenPopup("Conflicting Space Calibrator install");
-				if (ImGui::BeginPopupModal("Conflicting Space Calibrator install", 0, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
-					ImGui::Text("You have multiple versions of Space Calibrator installed!\n\nPlease uninstall the GitHub version to use the Steam version of Space Calibrator.\n\nDo you wish to open the settings app to uninstall the GitHub version of Space Calibrator? (SteamVR will have to be closed)");
-
-					ImGui::NewLine();
-
-					float windowWidth = ImGui::GetWindowWidth();
-					ImGui::SetCursorPosX(windowWidth / 11.0f);
-					if (ImGui::Button("Yes", ImVec2(windowWidth * 3.0f / 11.0f, 0))) {
-						UninstallGithubSpaceCalibrator();
-						githubPopupDismissed = true;
-					}
-					ImGui::SameLine();
-					ImGui::SetCursorPosX(windowWidth / 11.0f * 6.0f);
-					if (ImGui::Button("No", ImVec2(windowWidth * 3.0f / 11.0f, 0))) {
-						githubPopupDismissed = true;
-					}
-
-					ImGui::EndPopup();
-				}
+			if (dashboardVisible && (ImGui::GetIO().WantCaptureMouse || ImGui::GetIO().WantCaptureKeyboard)) {
+				NoteDashboardInteraction();
 			}
 
 			ImGui::Render();
@@ -491,6 +429,7 @@ void RunLoop() {
 			if (width && height)
 			{
 				glBindFramebuffer(GL_READ_FRAMEBUFFER, fboHandle);
+				// Blit using reported framebuffer size (as in pushrax original render settings)
 				glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 				glfwSwapBuffers(glfwWindow);
 			}
@@ -514,21 +453,36 @@ void RunLoop() {
 			}
 		}
 
-		const double dashboardInterval = 1.0 / 90.0; // fps
-		double waitEventsTimeout = std::max(CalCtx.wantedUpdateInterval, dashboardInterval);
-
-		if (dashboardVisible && waitEventsTimeout > dashboardInterval)
-			waitEventsTimeout = dashboardInterval;
+		constexpr double kHiddenMinWaitInterval = 0.05;
+		const double now = glfwGetTime();
+		const bool dashboardRecentlyActive = dashboardVisible
+			&& (now - lastDashboardInteractionTime) < 2.0;
+		const double dashboardInterval = 1.0 / (dashboardRecentlyActive ? 90.0 : 30.0);
+		double waitEventsTimeout = CalCtx.wantedUpdateInterval;
+		if (!shouldRender) {
+			if (waitEventsTimeout <= 0.0 || waitEventsTimeout < kHiddenMinWaitInterval) {
+				waitEventsTimeout = kHiddenMinWaitInterval;
+			}
+		}
+		if (dashboardVisible) {
+			if (waitEventsTimeout <= 0) {
+				waitEventsTimeout = dashboardInterval;
+			} else {
+				waitEventsTimeout = std::min(waitEventsTimeout, dashboardInterval);
+			}
+		}
 
 		if (immediateRedraw) {
-			waitEventsTimeout = 0;
+			if (shouldRender) {
+				waitEventsTimeout = 0;
+			}
 			immediateRedraw = false;
 		}
 
 		glfwWaitEventsTimeout(waitEventsTimeout);
 
 		// If we're minimized rendering won't limit our frame rate so we need to do it ourselves.
-		if (glfwGetWindowAttrib(glfwWindow, GLFW_ICONIFIED))
+		if (iconified && !shouldRender)
 		{
 			double targetFrameTime = 1 / MINIMIZED_MAX_FPS;
 			double waitTime = targetFrameTime - (glfwGetTime() - lastFrameStartTime);
@@ -575,58 +529,13 @@ void VerifySetupCorrect() {
 		const char* newFileName = "manifest.vrmanifest";
 		char* lastSlash = strrchr(manifestPathBuffer, '\\');
 		if (lastSlash) {
-			*(lastSlash + 1) = '\0';
-			strcat(manifestPathBuffer, newFileName);
+			const size_t dirLen = static_cast<size_t>(lastSlash - manifestPathBuffer + 1);
+			snprintf(manifestPathBuffer + dirLen, sizeof(manifestPathBuffer) - dirLen, "%s", newFileName);
 		}
 
 		appErr = vr::VRApplications()->RemoveApplicationManifest(manifestPathBuffer);
 		if (appErr != vr::VRApplicationError_None) {
 			std::cout << "Failed to remove legacy application manifest. You may have duplicate entries in the overlays list." << std::endl;
-		}
-	}
-}
-
-// Checks if a GitHub install of Space Calibrator is available when running via Steam.
-// If the GitHub version is found, we yell at the user telling them to uninstall it first as it conflicts with the Steam version
-void CheckGithubVersionInstalledOnSteam() {
-	// there are 3 locations for the uninstall string, test each one of them
-	
-	// HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenVRSpaceCalibrator
-	std::string uninstallKeyValue = GetRegistryString(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenVRSpaceCalibrator", "UninstallString");
-	if (!uninstallKeyValue.empty()) {
-		// Space Calibrator was installed via GitHub, but we're running via Steam! Uh oh!
-		s_isGitHubVersionInstalled = true;
-		return;
-	}
-
-	// HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\OpenVRSpaceCalibrator
-	uninstallKeyValue = GetRegistryString(HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenVRSpaceCalibrator", "UninstallString");
-	if (!uninstallKeyValue.empty()) {
-		// Space Calibrator was installed via GitHub, but we're running via Steam! Uh oh!
-		s_isGitHubVersionInstalled = true;
-		return;
-	}
-
-	// HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall
-	uninstallKeyValue = GetRegistryString(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenVRSpaceCalibrator", "UninstallString");
-	if (!uninstallKeyValue.empty()) {
-		// Space Calibrator was installed via GitHub, but we're running via Steam! Uh oh!
-		s_isGitHubVersionInstalled = true;
-		return;
-	}
-
-	// Also check for the presence of a driver in the SteamVR runtime's drivers directory (I should really make the installer not install the driver there...)
-	char cVrRuntimePath[MAX_PATH] = { 0 };
-	unsigned int szPathLen = 0;
-	vr::VR_GetRuntimePath(cVrRuntimePath, MAX_PATH, &szPathLen);
-	if (szPathLen > 0 && std::filesystem::is_directory(cVrRuntimePath)) {
-		// vr runtime path is valid, check if the drivers dir exists and likewise 01spacecalibrator is present
-		// can be found at: {runtimedir}\\drivers\\01spacecalibrator
-		std::filesystem::path spaceCalibratorGitHubDriverPath = cVrRuntimePath;
-		spaceCalibratorGitHubDriverPath = spaceCalibratorGitHubDriverPath / "drivers" / "01spacecalibrator";
-		if (std::filesystem::is_directory(spaceCalibratorGitHubDriverPath)) {
-			// drivers dir exists, so set state
-			s_isGitHubVersionInstalled = true;
 		}
 	}
 }
@@ -674,18 +583,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 
 	try {
 		InitVR();
-		printf("isSteam: %d\n", isRunningViaSteam);
-		if (isRunningViaSteam) {
-			CheckGithubVersionInstalledOnSteam();
-			printf("foundGithub: %d\n", s_isGitHubVersionInstalled);
-			if (s_isGitHubVersionInstalled) {
-
-			}
-		}
 		VerifySetupCorrect();
 		CreateGLFWWindow();
 		InitCalibrator();
 		LoadProfile(CalCtx);
+		if (CalCtx.validProfile) {
+			ScanAndApplyProfile(CalCtx);
+		}
 		RunLoop();
 
 		vr::VR_Shutdown();

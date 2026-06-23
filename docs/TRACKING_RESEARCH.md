@@ -74,6 +74,9 @@ SpaceCal sits **between** SLAM reference and lighthouse targets — it cannot re
 |----------|-------------------|
 | **Yaw drift** | Gyro integration drifts; magnetometer helps locally but is noisy near PC/metal ([Meta/Oculus sensor fusion docs](https://developers.meta.com/horizon/blog/magnetometer/)). This fork uses `trustTargetYaw` — lighthouse owns yaw, not Quest. |
 | **Guardian / universe ID** | Recentering, room changes, or "finding position" events shift the SLAM origin. SpaceCal P3 `GuardianDrift` watches this. |
+
+**Disabling Guardian entirely (Quest Pro dev settings):**  
+Enable Developer Mode, then in headset Settings > System > Developer toggle off Guardian/Boundary (or use ADB `adb shell setprop debug.oculus.guardian_pause 1`). This removes Meta's boundary enforcement and greatly reduces guardian-induced origin shifts/recenters in the SLAM reference. Pairs well with SpaceCal's recent mitigations (force-apply stored chaperone for slam refs, `autoRecalOnGuardianDrift=false`, no sample buffer clears on drift). **Safety warning**: No boundaries; clear play area. May affect passthrough/MR apps. See our code changes for pushing lighthouse-aligned playspace. |
 | **IMU extrapolation** | When cameras lose feature lock briefly, poses are predicted forward → spikes in reference pose. Fork gates: `poseTimeOffset`, `rejectYawDriftPoses`, spike rejection. |
 | **Head model** | Quest reports a modeled head center, not a physical mount point. Offset error looks like body lean — tune `continuous_calibration_target_offset` XYZ. |
 
@@ -118,6 +121,14 @@ Higher bitrate reduces artifacting but **does not eliminate pose latency** — W
 - VD adds **encode → network → decode → SteamVR compositor** delay.
 - SteamVR receives poses that may be **time-stamped ahead or behind** lighthouse poses on the PC.
 - This fork compensates partially: `compensatePoseTimeOffset`, `maxReferencePoseTimeOffset` (40 ms), `maxPoseTimeSkew` (50 ms).
+
+**Staged Tracking ("Center to Playspace (Stage Tracking)") in VD:**  
+In VD app (Quest) Settings > Streaming, the "Center to Playspace (Stage Tracking)" toggle forces stage-relative tracking. It anchors SteamVR's playspace/coordinates to the Quest's Guardian/stage origin for cross-session consistency and reduced drift with external trackers.  
+
+- Normally **recommended ON** for MixedVR/FBT + SpaceCal (or SpaceOverride) to keep calibration stable without frequent recenters.  
+- Turn **OFF** when you want more direct/raw tracking data and less forced anchoring to (even a disabled) Meta playspace. This helps your goal of reducing Meta guardian involvement.  
+
+With Guardian/chaperone disabled on Quest + staged off: You get rawer Quest SLAM poses with minimal Meta playspace "staging". Complements our code (relaxed continuous-mode skew/offset gates, jitter-adaptive spikes, force-pushed stored chaperone). Trade-off: potentially more session-to-session playspace drift (staged tracking's main benefit). Test with metrics (error_byRelPose, jitterRef, continuous segment length) and `lock_relative_position=true`. |
 
 ### Practical tuning
 

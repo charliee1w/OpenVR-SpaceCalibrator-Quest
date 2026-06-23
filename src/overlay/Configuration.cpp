@@ -168,8 +168,16 @@ static void ParseChainObject(const picojson::object& obj, CalibrationChain& chai
 
 	chain.slamReference = VRState::IsSlamTrackingSystem(chain.referenceTrackingSystem);
 	chain.valid = true;
+	// One-shot profiles saved before relative-gate fix stored relative_pos_calibrated=false
+	// while lock_relative_position=true, which blocked ScanAndApplyProfile on load.
+	if (chain.lockRelativePosition && !chain.relativePosCalibrated) {
+		chain.relativePosCalibrated = true;
+	}
 	chain.calibration.setRelativeTransformation(chain.refToTargetPose, chain.relativePosCalibrated);
 	chain.calibration.lockRelativePosition = chain.lockRelativePosition;
+	chain.calibration.SeedEstimatedTransformation(
+		CalibrationCalc::AffineFromSavedProfile(
+			chain.calibratedTranslation, chain.calibratedRotation));
 
 	if (isPrimary) {
 		if (obj.count("alignment_params")) {
@@ -194,6 +202,48 @@ static void ParseChainObject(const picojson::object& obj, CalibrationChain& chai
 		if (obj.count("calibration_speed") && obj.at("calibration_speed").is<double>()) {
 			sharedCtx.calibrationSpeed = (CalibrationContext::Speed)(int)obj.at("calibration_speed").get<double>();
 		}
+		if (obj.count("continuous_spike_threshold") && obj.at("continuous_spike_threshold").is<double>()) {
+			sharedCtx.continuousSpikeThresholdM = (float)obj.at("continuous_spike_threshold").get<double>();
+		}
+		if (obj.count("continuous_frozen_frame_threshold") && obj.at("continuous_frozen_frame_threshold").is<double>()) {
+			sharedCtx.continuousFrozenFrameThreshold = (int)obj.at("continuous_frozen_frame_threshold").get<double>();
+		}
+		if (obj.count("pause_on_reference_jitter") && obj.at("pause_on_reference_jitter").is<bool>()) {
+			sharedCtx.pauseOnReferenceJitter = obj.at("pause_on_reference_jitter").get<bool>();
+		}
+		if (obj.count("apply_head_model_to_reference") && obj.at("apply_head_model_to_reference").is<bool>()) {
+			sharedCtx.applyHeadModelToReference = obj.at("apply_head_model_to_reference").get<bool>();
+		}
+		if (obj.count("reject_yaw_drift_poses") && obj.at("reject_yaw_drift_poses").is<bool>()) {
+			sharedCtx.rejectYawDriftPoses = obj.at("reject_yaw_drift_poses").get<bool>();
+		}
+		if (obj.count("trust_target_yaw") && obj.at("trust_target_yaw").is<bool>()) {
+			sharedCtx.trustTargetYaw = obj.at("trust_target_yaw").get<bool>();
+		}
+		if (obj.count("compensate_pose_time_offset") && obj.at("compensate_pose_time_offset").is<bool>()) {
+			sharedCtx.compensatePoseTimeOffset = obj.at("compensate_pose_time_offset").get<bool>();
+		}
+		if (obj.count("max_reference_pose_time_offset") && obj.at("max_reference_pose_time_offset").is<double>()) {
+			sharedCtx.maxReferencePoseTimeOffset = (float)obj.at("max_reference_pose_time_offset").get<double>();
+		}
+		if (obj.count("max_pose_time_skew") && obj.at("max_pose_time_skew").is<double>()) {
+			sharedCtx.maxPoseTimeSkew = (float)obj.at("max_pose_time_skew").get<double>();
+		}
+		if (obj.count("guardian_drift_trans_threshold_m") && obj.at("guardian_drift_trans_threshold_m").is<double>()) {
+			sharedCtx.guardianDriftTransThresholdM = (float)obj.at("guardian_drift_trans_threshold_m").get<double>();
+		}
+		if (obj.count("guardian_drift_yaw_threshold_deg") && obj.at("guardian_drift_yaw_threshold_deg").is<double>()) {
+			sharedCtx.guardianDriftYawThresholdRad = (float)obj.at("guardian_drift_yaw_threshold_deg").get<double>() * EIGEN_PI / 180.0f;
+		}
+		if (obj.count("guardian_drift_confirm_checks") && obj.at("guardian_drift_confirm_checks").is<double>()) {
+			sharedCtx.guardianDriftConfirmChecks = (int)obj.at("guardian_drift_confirm_checks").get<double>();
+		}
+		if (obj.count("guardian_drift_cooldown_frames") && obj.at("guardian_drift_cooldown_frames").is<double>()) {
+			sharedCtx.guardianDriftCooldownFrames = (int)obj.at("guardian_drift_cooldown_frames").get<double>();
+		}
+		if (obj.count("auto_recal_on_guardian_drift") && obj.at("auto_recal_on_guardian_drift").is<bool>()) {
+			sharedCtx.autoRecalOnGuardianDrift = obj.at("auto_recal_on_guardian_drift").get<bool>();
+		}
 		if (obj.count("chaperone") && obj.at("chaperone").is<picojson::object>()) {
 			auto chaperone = obj.at("chaperone").get<picojson::object>();
 			sharedCtx.chaperone.autoApply = chaperone["auto_apply"].get<bool>();
@@ -205,7 +255,8 @@ static void ParseChainObject(const picojson::object& obj, CalibrationChain& chai
 			);
 			if (chaperone["geometry"].is<picojson::array>()) {
 				auto& geometry = chaperone["geometry"].get<picojson::array>();
-				if (geometry.size() > 0) {
+				constexpr size_t kMaxChaperoneGeometryFloats = 65536;
+				if (geometry.size() > 0 && geometry.size() <= kMaxChaperoneGeometryFloats) {
 					sharedCtx.chaperone.geometry.resize(geometry.size() * sizeof(float) / sizeof(sharedCtx.chaperone.geometry[0]));
 					LoadFloatArray(chaperone["geometry"], (float*)sharedCtx.chaperone.geometry.data(), geometry.size());
 					sharedCtx.chaperone.valid = true;
@@ -305,6 +356,20 @@ static picojson::object WriteChainObject(const CalibrationChain& chain, Calibrat
 		SetJsonNumber(profile, "jitter_threshold", (double)ctx.jitterThreshold);
 		SetJsonNumber(profile, "max_relative_error_threshold", (double)ctx.maxRelativeErrorThreshold);
 		SetJsonNumber(profile, "calibration_speed", (double)ctx.calibrationSpeed);
+		SetJsonNumber(profile, "continuous_spike_threshold", (double)ctx.continuousSpikeThresholdM);
+		SetJsonNumber(profile, "continuous_frozen_frame_threshold", (double)ctx.continuousFrozenFrameThreshold);
+		SetJsonBool(profile, "pause_on_reference_jitter", ctx.pauseOnReferenceJitter);
+		SetJsonBool(profile, "apply_head_model_to_reference", ctx.applyHeadModelToReference);
+		SetJsonBool(profile, "reject_yaw_drift_poses", ctx.rejectYawDriftPoses);
+		SetJsonBool(profile, "trust_target_yaw", ctx.trustTargetYaw);
+		SetJsonBool(profile, "compensate_pose_time_offset", ctx.compensatePoseTimeOffset);
+		SetJsonNumber(profile, "max_reference_pose_time_offset", (double)ctx.maxReferencePoseTimeOffset);
+		SetJsonNumber(profile, "max_pose_time_skew", (double)ctx.maxPoseTimeSkew);
+		SetJsonNumber(profile, "guardian_drift_trans_threshold_m", (double)ctx.guardianDriftTransThresholdM);
+		SetJsonNumber(profile, "guardian_drift_yaw_threshold_deg", (double)(ctx.guardianDriftYawThresholdRad * 180.0 / EIGEN_PI));
+		SetJsonNumber(profile, "guardian_drift_confirm_checks", (double)ctx.guardianDriftConfirmChecks);
+		SetJsonNumber(profile, "guardian_drift_cooldown_frames", (double)ctx.guardianDriftCooldownFrames);
+		SetJsonBool(profile, "auto_recal_on_guardian_drift", ctx.autoRecalOnGuardianDrift);
 		if (ctx.chaperone.valid) {
 			picojson::object chaperone;
 			SetJsonBool(chaperone, "auto_apply", ctx.chaperone.autoApply);
@@ -323,6 +388,12 @@ static picojson::object WriteChainObject(const CalibrationChain& chain, Calibrat
 		SetJsonBool(profile, "quash_target_in_continuous", false);
 		SetJsonBool(profile, "require_trigger_press_to_apply", false);
 		SetJsonBool(profile, "ignore_outliers", ctx.ignoreOutliers);
+		SetJsonBool(profile, "pause_on_reference_jitter", false);
+		SetJsonBool(profile, "apply_head_model_to_reference", false);
+		SetJsonBool(profile, "reject_yaw_drift_poses", false);
+		SetJsonBool(profile, "trust_target_yaw", false);
+		SetJsonBool(profile, "compensate_pose_time_offset", false);
+		SetJsonBool(profile, "auto_recal_on_guardian_drift", false);
 	}
 
 	return profile;
@@ -351,9 +422,14 @@ static void WriteProfile(CalibrationContext &ctx, std::ostream &out)
 
 static void LogRegistryResult(LSTATUS result)
 {
-	char *message;
-	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER, 0, result, LANG_USER_DEFAULT, (LPSTR)&message, 0, nullptr);
-	std::cerr << "Opening registry key: " << message << std::endl;
+	char *message = nullptr;
+	const DWORD size = FormatMessageA(
+		FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER,
+		nullptr, result, LANG_USER_DEFAULT, (LPSTR)&message, 0, nullptr);
+	if (size > 0 && message != nullptr) {
+		std::cerr << "Opening registry key: " << message << std::endl;
+		LocalFree(message);
+	}
 }
 
 static const char *RegistryKey = "Software\\OpenVR-SpaceCalibrator";
@@ -364,6 +440,12 @@ static std::string ReadRegistryKey()
 	auto result = RegGetValueA(HKEY_CURRENT_USER_LOCAL_SETTINGS, RegistryKey, "Config", RRF_RT_REG_SZ, 0, 0, &size);
 	if (result != ERROR_SUCCESS) {
 		LogRegistryResult(result);
+		return "";
+	}
+
+	constexpr DWORD kMaxRegistryConfigBytes = 4 * 1024 * 1024;
+	if (size == 0 || size > kMaxRegistryConfigBytes) {
+		std::cerr << "Registry config size out of range: " << size << std::endl;
 		return "";
 	}
 
@@ -419,6 +501,11 @@ void LoadProfile(CalibrationContext &ctx)
 		std::stringstream io(str);
 		ParseProfile(ctx, io);
 		std::cout << "Loaded profile" << std::endl;
+		const bool migratedModes = ctx.lockRelativePosition && ctx.enableStaticRecalibration;
+		ctx.ReconcileContinuousRefinementModes();
+		if (ctx.validProfile && (migratedModes || (ctx.lockRelativePosition && ctx.relativePosCalibrated))) {
+			SaveProfile(ctx);
+		}
 	} catch (const std::runtime_error &e) {
 		std::cerr << "Error loading profile: " << e.what() << std::endl;
 	}

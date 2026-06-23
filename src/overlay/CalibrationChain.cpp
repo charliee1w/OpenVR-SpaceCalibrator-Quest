@@ -58,35 +58,57 @@ void SyncPrimaryChainToCalCtx() {
 	CalCtx.continuousCalibrationOffset = chain.continuousCalibrationOffset;
 }
 
-int FindChainIndexForTargetSystem(const std::string& trackingSystem) {
-	for (int i = 0; i < (int)CalChains.size(); i++) {
-		if (CalChains[i].valid && CalChains[i].targetTrackingSystem == trackingSystem) {
-			return i;
-		}
+bool IsDeviceConnected(int deviceId) {
+	if (deviceId < 0 || !vr::VRSystem()) {
+		return false;
 	}
-	return -1;
+	return vr::VRSystem()->GetTrackedDeviceClass(deviceId) != vr::TrackedDeviceClass_Invalid;
 }
 
 bool AssignChainTargets(CalibrationChain& chain) {
 	auto state = VRState::Load();
 
-	if (chain.referenceID < 0) {
-		chain.referenceID = state.FindDevice(
-			chain.referenceStandby.trackingSystem,
-			chain.referenceStandby.model,
-			chain.referenceStandby.serial
-		);
+	int resolvedReference = -1;
+	if (chain.referenceTrackingSystem.empty()
+		|| VRState::IsSlamTrackingSystem(chain.referenceTrackingSystem)) {
+		const SlamReferenceMatch ref = state.ResolveSlamReference(
+			chain.referenceStandby, chain.referenceTrackingSystem);
+		resolvedReference = ref.deviceId;
+		if (resolvedReference >= 0) {
+			if (!ref.trackingSystem.empty()) {
+				chain.referenceStandby.trackingSystem = ref.trackingSystem;
+			}
+			if (!ref.model.empty()) {
+				chain.referenceStandby.model = ref.model;
+			}
+			if (!ref.serial.empty()) {
+				chain.referenceStandby.serial = ref.serial;
+			}
+			if (chain.referenceTrackingSystem.empty() && !ref.trackingSystem.empty()) {
+				chain.referenceTrackingSystem = ref.trackingSystem;
+			}
+		}
+	} else {
+		resolvedReference = state.ResolveStandbyDevice(
+			chain.referenceStandby, chain.referenceTrackingSystem);
 	}
 
-	if (chain.targetID < 0) {
-		chain.targetID = state.FindDevice(
-			chain.targetStandby.trackingSystem,
-			chain.targetStandby.model,
-			chain.targetStandby.serial
-		);
+	if (resolvedReference >= 0
+		&& (chain.referenceID != resolvedReference || !VRState::IsDeviceConnected(chain.referenceID))) {
+		chain.referenceID = resolvedReference;
+	}
+
+	const int resolvedTarget = state.ResolveStandbyDevice(
+		chain.targetStandby, chain.targetTrackingSystem);
+	if (resolvedTarget >= 0
+		&& (chain.targetID < 0 || !VRState::IsDeviceConnected(chain.targetID))) {
+		chain.targetID = resolvedTarget;
 	}
 
 	chain.slamReference = VRState::IsSlamTrackingSystem(chain.referenceTrackingSystem);
+	if (chain.slamReference) {
+		CalCtx.autoRecalOnGuardianDrift = false;
+	}
 	return chain.referenceID >= 0 && chain.targetID >= 0;
 }
 
@@ -131,14 +153,21 @@ void ProcessContinuousChain(CalibrationChain& chain, CalibrationContext& ctx, do
 	bool lerp = false;
 	chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
 	chain.calibration.lockRelativePosition = chain.lockRelativePosition;
-	chain.calibration.ComputeIncremental(
-		lerp,
-		CalCtx.continuousCalibrationThreshold,
-		CalCtx.maxRelativeErrorThreshold,
-		CalCtx.ignoreOutliers
-	);
+	const bool startupWarmup = CalCtx.continuousStartupSkipApplies > 0 && chain.calibration.isValid();
+	if (!startupWarmup) {
+		chain.calibration.ComputeIncremental(
+			lerp,
+			CalCtx.continuousCalibrationThreshold,
+			CalCtx.maxRelativeErrorThreshold,
+			CalCtx.ignoreOutliers
+		);
+	}
 
 	if (!chain.calibration.isValid()) {
+		return;
+	}
+
+	if (CalCtx.continuousStartupSkipApplies > 0) {
 		return;
 	}
 
@@ -159,14 +188,20 @@ void StartContinuousChains() {
 		if (!chain.autostartContinuous && &chain != &CalChains[0]) continue;
 
 		AssignChainTargets(chain);
-		if (chain.slamReference) {
-			CalCtx.ApplySlamReferencePreset();
-		}
 		chain.continuousActive = true;
-		chain.calibration.Clear();
-		chain.calibration.ResetContinuousGuards();
-		chain.calibration.setRelativeTransformation(chain.refToTargetPose, chain.relativePosCalibrated);
-		chain.calibration.lockRelativePosition = chain.lockRelativePosition;
+
+		Eigen::AffineCompact3d seed;
+		const Eigen::AffineCompact3d* seedPtr = nullptr;
+		if (chain.valid) {
+			seed = CalibrationCalc::AffineFromSavedProfile(
+				chain.calibratedTranslation, chain.calibratedRotation);
+			seedPtr = &seed;
+		}
+		chain.calibration.BeginContinuousSession(
+			chain.refToTargetPose,
+			chain.relativePosCalibrated,
+			chain.lockRelativePosition,
+			seedPtr);
 		chain.calibration.enableStaticRecalibration = CalCtx.enableStaticRecalibration;
 
 		char buf[128];

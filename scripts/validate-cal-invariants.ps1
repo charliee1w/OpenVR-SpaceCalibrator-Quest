@@ -42,6 +42,31 @@ Add-Check "relative pose reset on end continuous" `
     ($calCppText -match 'EndContinuousCalibration[\s\S]*relativePosCalibrated = false') `
     "EndContinuousCalibration must clear relativePosCalibrated"
 
+$scanIdx = $calCppText.IndexOf('void ScanAndApplyProfile(CalibrationContext &ctx)')
+if ($scanIdx -lt 0) {
+    $scanIdx = $calCppText.IndexOf('void ScanAndApplyProfile(CalibrationContext& ctx)')
+}
+$scanEnd = if ($scanIdx -ge 0) {
+    $nextFn = [regex]::Match($calCppText.Substring($scanIdx + 1), '(?m)^void ').Index
+    if ($nextFn -lt 0) { $calCppText.Length } else { $scanIdx + 1 + $nextFn }
+} else { -1 }
+$scanBody = if ($scanIdx -ge 0 -and $scanEnd -gt $scanIdx) {
+    $calCppText.Substring($scanIdx, $scanEnd - $scanIdx)
+} else { "" }
+Add-Check "upstream apply gate in ScanAndApplyProfile" `
+    ($scanBody -match 'ctx\.enabled = ctx\.validProfile') `
+    "Apply enabled flag must follow upstream: validProfile only, no CanApply gate"
+Add-Check "upstream device match in ScanAndApplyProfile" `
+    ($scanBody -match 'trackingSystem != ctx\.targetTrackingSystem' `
+        -and -not ($scanBody -match 'FindChainIndexForTargetSystem|ResolveChainForDevice|ResolveChainIndexForTargetSystem')) `
+    "Device loop must match target tracking system directly, not via chain index lookup"
+Add-Check "upstream transform source in ScanAndApplyProfile" `
+    ($scanBody -match 'VRTranslationVec\(ctx\.calibratedTranslation\)') `
+    "Saved profile offsets must come from ctx.calibratedTranslation, not live chain solver"
+Add-Check "SyncCalCtxToPrimaryChain before apply scan" `
+    ($scanBody -match 'SyncCalCtxToPrimaryChain') `
+    "ScanAndApplyProfile syncs chain metadata before device loop (fork metadata only; does not change match logic)"
+
 $failed = @($checks | Where-Object { -not $_.Pass })
 foreach ($c in $checks) {
     $status = if ($c.Pass) { "PASS" } else { "FAIL" }

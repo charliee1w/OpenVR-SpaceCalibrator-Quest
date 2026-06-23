@@ -85,6 +85,18 @@ bool HandleGuardianDrift(CalibrationContext& ctx, GuardianDriftState& state, dou
 		return false;
 	}
 
+	if (ctx.slamReference) {
+		// Guardian off on Quest Pro (user setting) -> live guardian empty (quadCount=0) or default.
+		// No guardian-induced origin shifts. Our stored chaperone (from lighthouse head tracker alignment) is the authority.
+		// Force apply our stored if quadCount mismatch (will be live=0 vs our saved size).
+		if (ctx.chaperone.autoApply && live.quadCount != ctx.chaperone.geometry.size()) {
+			ApplyChaperoneBounds();
+			ctx.Log("Applied stored chaperone (guardian off on Quest)\n");
+		}
+		state.lastSnapshot = live;
+		return false;
+	}
+
 	bool driftDetected = false;
 	std::string driftReason;
 
@@ -130,12 +142,26 @@ bool HandleGuardianDrift(CalibrationContext& ctx, GuardianDriftState& state, dou
 	Metrics::WriteLogAnnotation("GuardianDrift");
 
 	if (ctx.chaperone.autoApply) {
-		LoadChaperoneBounds();
-		SaveProfile(ctx);
-		ctx.Log("Updated profile chaperone from live guardian\n");
+		if (ctx.slamReference) {
+			// Reduce Meta/Quest guardian playspace influence:
+			// Push our stored chaperone (derived from initial alignment + lighthouse target)
+			// instead of pulling live Meta guardian which causes origin conflicts.
+			ApplyChaperoneBounds();
+			SaveProfile(ctx);  // keep profile in sync
+			ctx.Log("Applied stored (lighthouse-aligned) chaperone to override Meta guardian\n");
+		} else {
+			LoadChaperoneBounds();
+			SaveProfile(ctx);
+			ctx.Log("Updated profile chaperone from live guardian\n");
+		}
 	}
 
-	primaryCalc.Clear();
+	// Improvement 2 (cross-validate intent): for slam/Quest-VD avoid clearing sample buffer on
+	// every guardian micro-shift (false pos common per logs). Only reset guards + cooldown.
+	// Full Clear only for non-slam or if explicitly high mismatch (future: pass recent error_byRelPose).
+	if (!ctx.slamReference) {
+		primaryCalc.Clear();
+	}
 	primaryCalc.ResetContinuousGuards();
 	state.driftCooldownFrames = ctx.guardianDriftCooldownFrames;
 	state.lastSnapshot = live;

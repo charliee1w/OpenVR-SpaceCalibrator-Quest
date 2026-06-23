@@ -7,6 +7,7 @@ ipch
 .code
 /install/*.exe
 [bB]in
+build/
 
 # Local / personal artifacts — do not publish
 profiles/p4-*.json
@@ -17,8 +18,15 @@ docs/AGENT_HANDOFF.md
 agent-tools/
 
 # Local agent / MCP tooling (consolidation_memory — working copy only)
+# Agent policy is local-only on Windows (Agents.md / AGENTS.md collide). Keep in repo via .cursor/rules only.
 Agents.md
+AGENTS.md
 mcps/
 .cursor/mcp.json
 .cursor/hooks.json
+.mcp.json
+.cursor/rules/developer-gore.local.mdc
 .grok/
+
+# wire-local-consolidation-memory.ps1 lives under the already-ignored agent-tools/
+# (the script + its outputs are strictly private and must never be committed)

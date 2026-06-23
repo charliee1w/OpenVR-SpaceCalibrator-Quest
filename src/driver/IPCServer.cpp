@@ -28,6 +28,7 @@ void IPCServer::HandleRequest(const protocol::Request &request, protocol::Respon
 
 	default:
 		LOG("Invalid IPC request: %d", request.type);
+		response.type = protocol::ResponseInvalid;
 		break;
 	}
 }
@@ -180,7 +181,7 @@ void IPCServer::CompletedReadCallback(DWORD err, DWORD bytesRead, LPOVERLAPPED o
 	PipeInstance *pipeInst = (PipeInstance *) overlap;
 	BOOL success = FALSE;
 
-	if (err == 0 && bytesRead > 0)
+	if (err == 0 && bytesRead == sizeof(protocol::Request))
 	{
 		pipeInst->server->HandleRequest(pipeInst->request, pipeInst->response);
 		success = WriteFileEx(

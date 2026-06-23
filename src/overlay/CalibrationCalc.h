@@ -92,9 +92,27 @@ public:
 		m_relativePosCalibrated = calibrated;
 	}
 
+	// Seed the internal estimated transform from saved profile so enabling cont cal
+	// doesn't cause an immediate jump/offset from re-computing based on current live samples.
+	void SeedEstimatedTransformation(const Eigen::AffineCompact3d& est) {
+		m_estimatedTransformation = est;
+		m_isValid = true;
+	}
+
 	void PushSample(const Sample& sample);
 	void Clear();
 	void ResetContinuousGuards();
+
+	// Continuous-session entry: clear sample window only; keep one-shot profile inputs intact.
+	void BeginContinuousSession(
+		const Eigen::AffineCompact3d& refToTargetPose,
+		bool relativePosCalibrated,
+		bool lockRelativePosition,
+		const Eigen::AffineCompact3d* seedFromSavedProfile = nullptr);
+
+	static Eigen::AffineCompact3d AffineFromSavedProfile(
+		const Eigen::Vector3d& translationCm,
+		const Eigen::Vector3d& eulerDeg);
 
 	double ReferenceJitter() const;
 	double TargetJitter() const;
@@ -120,7 +138,7 @@ public:
 
 	void PruneRecentSamples(size_t count);
 
-	CalibrationCalc() : m_isValid(false), m_calcCycle(0), enableStaticRecalibration(true) {}
+	CalibrationCalc() : m_isValid(false), m_calcCycle(0), enableStaticRecalibration(false) {}
 
 	// Debug fields
 	Eigen::Vector3d m_posOffset;
@@ -145,6 +163,23 @@ private:
 	bool m_hasLastRawPosOffset = false;
 	Eigen::Vector3d m_lastRawPosOffset = Eigen::Vector3d::Zero();
 	int m_frozenOffsetFrames = 0;
+	int m_staticRelPoseConfirmFrames = 0;
+
+	bool m_hasSavedProfileSeed = false;
+	Eigen::AffineCompact3d m_savedProfileSeed = Eigen::AffineCompact3d::Identity();
+	bool m_hasLastTrackedAppliedOffset = false;
+	Eigen::Vector3d m_lastTrackedAppliedOffset = Eigen::Vector3d::Zero();
+	int m_stuckAppliedOffsetFrames = 0;
+	int m_divergedConditionFrames = 0;
+	double m_lastDivergedRecoveryTime = 0.0;
+
+	bool ConfirmStaticRelPoseApply(bool eligible, bool allowImmediate);
+	void TrackAppliedOffsetStall(const Eigen::Vector3d& priorPosOffset);
+	void AnnotateLockRelReject(const char* reason, double detailMm, bool driftRecovery);
+	bool CalibrateByRelPoseRecent(size_t maxSamples, Eigen::AffineCompact3d& out) const;
+	bool TryInstantRelCalibration(Eigen::AffineCompact3d& out, double& errorOut) const;
+	bool WithinRecoveryJump(const Eigen::AffineCompact3d& candidate, double maxTransM, double maxRotRad) const;
+	bool AttemptDivergedRecovery(double priorErrorM, Eigen::AffineCompact3d& out, double& outError);
 
 	std::vector<bool> DetectOutliers() const;
 	Eigen::Vector3d CalibrateRotation(const bool ignoreOutliers) const;
@@ -158,7 +193,7 @@ private:
 
 	Eigen::Vector4d ComputeAxisVariance(const Eigen::AffineCompact3d& calibration) const;
 
-	[[nodiscard]] bool ValidateCalibration(const Eigen::AffineCompact3d& calibration, double *errorOut = nullptr, Eigen::Vector3d* posOffsetV = nullptr);
+	[[nodiscard]] bool ValidateCalibration(const Eigen::AffineCompact3d& calibration, double *errorOut = nullptr, Eigen::Vector3d* posOffsetV = nullptr) const;
 	void ComputeInstantOffset();
 
 	Eigen::AffineCompact3d EstimateRefToTargetPose(const Eigen::AffineCompact3d& calibration) const;

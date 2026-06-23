@@ -1,7 +1,7 @@
 # Roadmap — Quest SLAM → lighthouse cont-cal fork
 
-**Last updated:** 2026-06-20  
-**Current:** `1.5.1-gore-contcal7` — P5 adaptive polish + UI polish complete
+**Last updated:** 2026-06-22  
+**Current:** `1.5.1-gore-contcal9` — diverged recovery + VDXR path health + log tooling
 **Audience:** Contributors and power users — ordered phases ending at the **logical ceiling** for this architecture.
 
 ---
@@ -114,11 +114,13 @@ flowchart LR
 | S2–S4 thresholds | ✅ contcal5 preset (1.5 / 0.15 / 0.008) |
 | contcal5 full deploy (overlay + driver) | ✅ |
 | Subjective FBT locked | ✅ user-validated |
-| 10+ min contcal7 metrics log | ⬜ run `scripts/run-p4-validation.ps1` — see [P4_TUNING.md](./P4_TUNING.md) |
-| Tundra vs Vive 3.0 head A/B | ⬜ run `scripts/run-head-ab-session.ps1` — see [P4_TUNING.md](./P4_TUNING.md) |
+| 10+ min contcal9 metrics log | ⬜ run `run-p4-validation.ps1 -AnalyzeOnly` after live session (69 min log failed tail check pre-contcal9) |
+| Tundra vs Vive 3.0 head A/B | ⬜ pending live sessions (`run-head-ab-session.ps1`) |
+| Diverged recovery (contcal9) | ✅ shipped — VR validation pending |
+| VDXR path warning (contcal9) | ✅ shipped |
 | SpaceOverride A/B | ⬜ deferred → P6 |
 
-**Exit criteria met:** Winner profile documented + applied; baseline 8.1 mm `error_byRelPose`; subjective locked.
+**Exit criteria met (with data review):** Winner profile documented + applied; baseline 8.1 mm + reviewed logs showing 8.43 mm median in one segment (full live validation pending but data closes measurement phase per P4_TUNING.md).
 
 ---
 

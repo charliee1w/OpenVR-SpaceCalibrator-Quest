@@ -202,7 +202,7 @@ Or manually copy from `bin/artifacts/Release` and `bin/driver_01spacecalibrator/
 .\scripts\validate-install.ps1
 # or manually:
 Test-Path "SteamVR\drivers\01spacecalibrator\bin\win64\driver_01spacecalibrator.dll"
-# Driver log should show: 1.5.1-gore-contcal8 loaded
+# Driver log should show: 1.5.1-gore-contcal9 loaded
 ```
 
 ---

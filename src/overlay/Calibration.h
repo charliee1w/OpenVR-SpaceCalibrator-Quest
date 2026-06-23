@@ -59,6 +59,9 @@ struct CalibrationContext
 	bool requireTriggerPressToApply = false;
 	bool wasWaitingForTriggers = false;
 	bool hasAppliedCalibrationResult = false;
+	float xprev = 0, yprev = 0, zprev = 0;
+	// Skip incremental applies for this many full-sample compute cycles after enabling cont cal.
+	int continuousStartupSkipApplies = 0;
 
 	float continuousCalibrationThreshold;
 	float maxRelativeErrorThreshold = 0.005f;
@@ -80,6 +83,13 @@ struct CalibrationContext
 	float guardianDriftYawThresholdRad = 3.0f * static_cast<float>(EIGEN_PI / 180.0);
 	int guardianDriftConfirmChecks = 2;
 	int guardianDriftCooldownFrames = 20;
+
+	float lastLiveErrorCurrentCalMm = 0.f;
+	float lastLiveErrorByRelPoseMm = 0.f;
+
+	bool steamVrPathOk = true;
+	std::string steamVrPathWarning;
+	double timeLastSteamVrPathCheck = 0;
 
 	DeviceTrackingState referenceTracking;
 	LARGE_INTEGER devicePoseSampleTime[vr::k_unMaxTrackedDeviceCount];
@@ -130,7 +140,7 @@ struct CalibrationContext
 		continuousFrozenFrameThreshold = 6;
 		pauseOnReferenceJitter = true;
 
-		enableStaticRecalibration = true;
+		enableStaticRecalibration = false;
 		slamReference = false;
 		applyHeadModelToReference = true;
 		rejectYawDriftPoses = true;
@@ -150,25 +160,36 @@ struct CalibrationContext
 		return threshold;
 	}
 
+	// lock_relative and static_recal both drive rel-pose refinement in cont cal — pick one.
+	void ReconcileContinuousRefinementModes() {
+		if (lockRelativePosition) {
+			enableStaticRecalibration = false;
+		}
+	}
+
 	// Tuned for Quest/VD/SLAM reference + lighthouse head tracker (see audit logs).
 	void ApplySlamReferencePreset() {
-		enableStaticRecalibration = true;
+		ReconcileContinuousRefinementModes();
 		pauseOnReferenceJitter = false;
 		continuousSpikeThresholdM = 0.05f;
 		continuousFrozenFrameThreshold = 5;
 		jitterThreshold = 0.15f;
-		maxRelativeErrorThreshold = 0.008f;
+		maxRelativeErrorThreshold = 0.025f;  // relaxed for SLAM cont (from 1hr log data: byRel errors often 10-20mm)
 		applyHeadModelToReference = true;
 		rejectYawDriftPoses = true;
 		trustTargetYaw = true;
 		compensatePoseTimeOffset = true;
 		maxReferencePoseTimeOffset = 0.04f;
-		maxPoseTimeSkew = 0.05f;
+		maxPoseTimeSkew = 0.08f;  // relaxed for VD jitter in cont (improvement 1)
 		guardianDriftTransThresholdM = 0.035f;
 		guardianDriftYawThresholdRad = 5.0f * static_cast<float>(EIGEN_PI / 180.0);
 		guardianDriftConfirmChecks = 3;
 		guardianDriftCooldownFrames = 60;
+		autoRecalOnGuardianDrift = false;  // per contcal45 + improvement 2 for VD false pos
 		calibrationSpeed = SLOW;
+		chaperone.autoApply = true;
+		// To reduce Meta playspace influence: we will force-apply our stored (lighthouse-aligned) chaperone
+		// instead of pulling live from Quest guardian. See HandleGuardianDrift and StartContinuous.
 	}
 
 	struct Chaperone
@@ -279,6 +300,11 @@ struct CalibrationContext
 		return referenceID >= 0 && referenceID <= vr::k_unMaxTrackedDeviceCount
 			&& devicePoses[referenceID].poseIsValid && devicePoses[referenceID].result == vr::ETrackingResult::TrackingResult_Running_OK;
 	}
+
+	// Gates live continuous refinement only (ComputeIncremental / ApplyChainCalibration).
+	bool CanApplyCalibrationTransform() const {
+		return !lockRelativePosition || relativePosCalibrated;
+	}
 };
 
 extern CalibrationContext CalCtx;
@@ -297,7 +323,9 @@ struct CalibrationChain;
 void ApplyChainCalibration(const CalibrationChain& chain, bool lerp);
 
 void InitCalibrator();
+void ScanAndApplyProfile(CalibrationContext& ctx);
 void CalibrationTick(double time);
+void UpdateSteamVrPathHealth(CalibrationContext& ctx);
 void StartCalibration();
 void StartContinuousCalibration();
 void EndContinuousCalibration();

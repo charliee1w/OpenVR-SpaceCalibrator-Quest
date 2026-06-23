@@ -180,6 +180,11 @@ inline vr::HmdVector3d_t quaternionRotateVector(const vr::HmdQuaternion_t& quat,
 
 void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTransform& newTransform)
 {
+	if (newTransform.openVRID >= vr::k_unMaxTrackedDeviceCount) {
+		LOG("SetDeviceTransform: invalid openVRID %u", newTransform.openVRID);
+		return;
+	}
+
 	auto &tf = transforms[newTransform.openVRID];
 	tf.enabled = newTransform.enabled;
 
@@ -202,10 +207,25 @@ void ServerTrackedDeviceProvider::SetDeviceTransform(const protocol::SetDeviceTr
 		tf.scale = newTransform.scale;
 
 	tf.quash = newTransform.quash;
+
+	if (newTransform.enabled) {
+		LOG("SetDeviceTransform id=%u en=1 trans=(%.3f,%.3f,%.3f) lerp=%d",
+			newTransform.openVRID,
+			newTransform.translation.v[0],
+			newTransform.translation.v[1],
+			newTransform.translation.v[2],
+			newTransform.lerp ? 1 : 0);
+	} else if (!newTransform.enabled) {
+		LOG("SetDeviceTransform id=%u en=0", newTransform.openVRID);
+	}
 }
 
 bool ServerTrackedDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr::DriverPose_t &pose)
 {
+	if (openVRID >= vr::k_unMaxTrackedDeviceCount) {
+		return true;
+	}
+
 	// Apply debug pose before anything else
 	if (openVRID > 0) {
 		auto dbgPos = convert(pose.vecPosition) + debugTransform;

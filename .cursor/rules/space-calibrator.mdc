@@ -1,20 +1,40 @@
 ---
-description: OpenVR Space Calibrator fork — Quest SLAM continuous calibration
+description: OpenVR Space Calibrator fork — upstream fidelity, tracking, continuous cal
 alwaysApply: true
 ---
 
-# Space Calibrator agent rules
+# Space Calibrator — mandatory agent rules
 
-Quest SLAM + lighthouse continuous calibration fork (`1.5.1-gore-contcal7`).
+**Read [Agents.md](../../Agents.md)** (`AGENTS.md` on case-sensitive systems) in full, especially **Upstream fidelity (don't break what already works)**. This file is the always-on summary; Agents.md is authoritative.
 
-## Before coding
+## Core rule
 
-Read when touching the area:
+Do not break what upstream already does right. This fork adds Quest SLAM / continuous cal — it does not rewrite working sample → solve → **sync chain** → **apply** → driver paths.
 
-- [README.md](README.md) — problem statement and fork features
-- [docs/ROADMAP.md](docs/ROADMAP.md) — phase status and ceiling
-- [docs/P4_TUNING.md](docs/P4_TUNING.md) — cont-cal parameter tuning
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — SteamVR driver deploy
+## Before any cal / apply / driver / pose edit
+
+1. Read `AGENTS.md` → Upstream fidelity section.
+2. Trace the full outcome chain; name every gate your change touches.
+3. Grep hot-path symbols (`ScanAndApplyProfile`, `SyncCalCtxToPrimaryChain`, `shmem.ReadNewPoses`, `ApplyChainCalibration`, `wantedUpdateInterval`).
+4. Do not ship without `scripts/validate-cal-invariants.ps1` passing (via `deploy.ps1`).
+
+## Non-negotiables
+
+- **Success = transforms applied**, not just profile saved.
+- `CalCtx.validProfile` ⇔ `CalChains[i].valid` + tracking systems synced before apply.
+- **Unified shmem only** in `CalibrationTick` — no VRSystem pose fallback for calibration samples.
+- **Symptom-driven changes** — if Quest shows OK and samples collect, do not rewrite detection/assignment unless that is the proven failure.
+- After behavior changes: build Release, run `deploy.ps1`, user restarts SteamVR; verify trackers move or log states why apply was skipped.
+
+## Docs when touching an area
+
+| Area | Read |
+|------|------|
+| Cal / apply / chains | `AGENTS.md`, `src/overlay/Calibration.cpp` |
+| Pose / driver | `scripts/validate-cal-invariants.ps1`, `src/driver/ServerTrackedDeviceProvider.cpp` |
+| Performance / overlay loop | `AGENTS.md` → Preventing intention drift |
+| Tuning | `docs/P4_TUNING.md` |
+| Deploy | `docs/DEPLOYMENT.md`, `scripts/deploy.ps1` |
 
 ## Project map
 
@@ -23,11 +43,4 @@ Read when touching the area:
 | Continuous calibration | `src/overlay/Calibration*.cpp`, `GuardianDrift.*` |
 | UI / presets | `src/overlay/UserInterface.cpp`, `Configuration.*` |
 | IPC / driver | `src/overlay/IPCClient.*`, `src/driver/` |
-| Profiles | `profiles/` (example presets; personal P4 winners are gitignored) |
-| Deploy | `scripts/deploy.ps1`, `scripts/validate-install.ps1` |
-
-## Build notes
-
-- CMake/MSVC Windows project; build output under `bin/`
-- Bump `src/common/Version.h` when IPC or driver protocol changes
-- Do not commit personal `profiles/p4-*.json` or log artifacts
+| Deploy gates | `scripts/validate-cal-invariants.ps1`, `scripts/deploy.ps1` |

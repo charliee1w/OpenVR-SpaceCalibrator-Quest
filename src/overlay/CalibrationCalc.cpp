@@ -3,6 +3,10 @@
 #include "CalibrationMetrics.h"
 #include "Protocol.h"
 
+#include <GLFW/glfw3.h>
+#include <cmath>
+#include <vector>
+
 inline vr::HmdQuaternion_t operator*(const vr::HmdQuaternion_t& lhs, const vr::HmdQuaternion_t& rhs) {
 	return {
 		(lhs.w * rhs.w) - (lhs.x * rhs.x) - (lhs.y * rhs.y) - (lhs.z * rhs.z),
@@ -128,6 +132,91 @@ void CalibrationCalc::ResetContinuousGuards() {
 	m_hasLastRawPosOffset = false;
 	m_lastRawPosOffset = Eigen::Vector3d::Zero();
 	m_frozenOffsetFrames = 0;
+	m_staticRelPoseConfirmFrames = 0;
+	m_hasLastTrackedAppliedOffset = false;
+	m_lastTrackedAppliedOffset = Eigen::Vector3d::Zero();
+	m_stuckAppliedOffsetFrames = 0;
+	m_divergedConditionFrames = 0;
+}
+
+namespace {
+constexpr int kStaticRelPoseConfirmRequired = 3;
+constexpr double kDriftRecoveryPriorErrorM = 0.04;
+constexpr double kDivergedPriorErrorM = 0.025;
+constexpr double kDivergedRelWorseMarginM = 0.003;
+constexpr double kDivergedRecoveryMinImprovementM = 0.002;
+constexpr int kStuckAppliedOffsetFramesRequired = 25;
+constexpr int kDivergedRecoveryConfirmFrames = 20;
+constexpr double kDivergedRecoveryCooldownS = 45.0;
+constexpr size_t kDivergedRecentSampleCount = 8;
+
+void MaybeLogLockRelReject(const char* reason, double detailM, bool driftRecovery) {
+	static double lastLogTime = 0.0;
+	const double now = glfwGetTime();
+	if (now - lastLogTime < 30.0) {
+		return;
+	}
+	lastLogTime = now;
+	char buf[160];
+	snprintf(buf, sizeof buf,
+		"Lock-relative held: %s (%.1f mm%s)\n",
+		reason, detailM * 1000.0, driftRecovery ? ", drift recovery active" : "");
+	CalCtx.Log(buf);
+}
+}
+
+bool CalibrationCalc::ConfirmStaticRelPoseApply(bool eligible, bool allowImmediate) {
+	if (!eligible) {
+		m_staticRelPoseConfirmFrames = 0;
+		return false;
+	}
+	if (allowImmediate) {
+		m_staticRelPoseConfirmFrames = 0;
+		return true;
+	}
+	m_staticRelPoseConfirmFrames++;
+	if (m_staticRelPoseConfirmFrames < kStaticRelPoseConfirmRequired) {
+		return false;
+	}
+	m_staticRelPoseConfirmFrames = 0;
+	return true;
+}
+
+Eigen::AffineCompact3d CalibrationCalc::AffineFromSavedProfile(
+	const Eigen::Vector3d& translationCm,
+	const Eigen::Vector3d& eulerDeg)
+{
+	const Eigen::Vector3d t = translationCm.cast<double>() * 0.01;
+	const Eigen::Vector3d e = eulerDeg;
+	return Eigen::Translation3d(t) *
+		(Eigen::AngleAxisd(e(0) * EIGEN_PI / 180.0, Eigen::Vector3d::UnitZ()) *
+		 Eigen::AngleAxisd(e(1) * EIGEN_PI / 180.0, Eigen::Vector3d::UnitY()) *
+		 Eigen::AngleAxisd(e(2) * EIGEN_PI / 180.0, Eigen::Vector3d::UnitX())).toRotationMatrix();
+}
+
+void CalibrationCalc::BeginContinuousSession(
+	const Eigen::AffineCompact3d& refToTargetPose,
+	bool relativePosCalibrated,
+	bool lockRelativePosition,
+	const Eigen::AffineCompact3d* seedFromSavedProfile)
+{
+	m_samples.clear();
+	ResetContinuousGuards();
+	m_axisVariance = 0.0;
+	m_refToTargetPose = refToTargetPose;
+	m_relativePosCalibrated = relativePosCalibrated;
+	this->lockRelativePosition = lockRelativePosition;
+
+	if (seedFromSavedProfile) {
+		SeedEstimatedTransformation(*seedFromSavedProfile);
+		m_savedProfileSeed = *seedFromSavedProfile;
+		m_hasSavedProfileSeed = true;
+	} else {
+		m_estimatedTransformation.setIdentity();
+		m_isValid = false;
+		m_hasSavedProfileSeed = false;
+	}
+	m_lastDivergedRecoveryTime = 0.0;
 }
 
 void CalibrationCalc::PruneRecentSamples(size_t count) {
@@ -149,7 +238,17 @@ bool CalibrationCalc::ShouldRejectContinuousSample(const Eigen::Vector3d& instan
 		return false;
 	}
 
-	return (instantOffset - m_lastInstantOffset).norm() > spikeThresholdM;
+	float effectiveThreshold = spikeThresholdM;
+	// Improvement 3: adaptive spike threshold using live jitter (higher jitter -> more tolerant to avoid rejecting valid SLAM variation)
+	if (CalCtx.slamReference) {
+		double j = ReferenceJitter();  // recent ref jitter
+		if (j > 0.5) {
+			float adapt = static_cast<float>(j * 0.4);
+			effectiveThreshold = std::max(effectiveThreshold, adapt);
+		}
+	}
+
+	return (instantOffset - m_lastInstantOffset).norm() > effectiveThreshold;
 }
 
 void CalibrationCalc::NoteContinuousSampleOffset(const Eigen::Vector3d& instantOffset) {
@@ -567,7 +666,7 @@ Eigen::Vector4d CalibrationCalc::ComputeAxisVariance(
 	return solver.eigenvalues();
 }
 
-[[nodiscard]] bool CalibrationCalc::ValidateCalibration(const Eigen::AffineCompact3d &calibration, double *error, Eigen::Vector3d *posOffsetV) {
+[[nodiscard]] bool CalibrationCalc::ValidateCalibration(const Eigen::AffineCompact3d &calibration, double *error, Eigen::Vector3d *posOffsetV) const {
 	bool ok = true;
 
 	const auto posOffset = ComputeRefToTargetOffset(calibration);
@@ -698,6 +797,134 @@ bool CalibrationCalc::CalibrateByRelPose(Eigen::AffineCompact3d &out) const {
 	return true;
 }
 
+void CalibrationCalc::AnnotateLockRelReject(const char* reason, double detailMm, bool driftRecovery) {
+	static std::string lastReason;
+	static double lastMetricAnnotationTime = 0.0;
+	const double now = glfwGetTime();
+	if (reason == lastReason && now - lastMetricAnnotationTime < 5.0) {
+		return;
+	}
+	lastReason = reason;
+	lastMetricAnnotationTime = now;
+
+	char ann[160];
+	snprintf(ann, sizeof ann, "LockRelReject:%s:%.0fmm%s",
+		reason, detailMm, driftRecovery ? ":drift" : "");
+	Metrics::WriteLogAnnotation(ann);
+	MaybeLogLockRelReject(reason, detailMm / 1000.0, driftRecovery);
+}
+
+void CalibrationCalc::TrackAppliedOffsetStall(const Eigen::Vector3d& priorPosOffset) {
+	constexpr double kOffsetEpsilonM = 0.001;
+	if (m_hasLastTrackedAppliedOffset
+		&& (priorPosOffset - m_lastTrackedAppliedOffset).norm() < kOffsetEpsilonM) {
+		m_stuckAppliedOffsetFrames++;
+	} else {
+		m_stuckAppliedOffsetFrames = 0;
+	}
+	m_lastTrackedAppliedOffset = priorPosOffset;
+	m_hasLastTrackedAppliedOffset = true;
+}
+
+bool CalibrationCalc::WithinRecoveryJump(
+	const Eigen::AffineCompact3d& candidate,
+	double maxTransM,
+	double maxRotRad) const
+{
+	const Eigen::Vector3d transJump = candidate.translation() - m_estimatedTransformation.translation();
+	if (transJump.norm() > maxTransM) {
+		return false;
+	}
+	const Eigen::AngleAxisd rotJump(
+		m_estimatedTransformation.rotation().inverse() * candidate.rotation());
+	return std::abs(rotJump.angle()) <= maxRotRad;
+}
+
+bool CalibrationCalc::CalibrateByRelPoseRecent(size_t maxSamples, Eigen::AffineCompact3d& out) const {
+	if (m_samples.empty()) {
+		return false;
+	}
+	const size_t start = m_samples.size() > maxSamples ? m_samples.size() - maxSamples : 0;
+	std::deque<Sample> recent(m_samples.begin() + static_cast<std::ptrdiff_t>(start), m_samples.end());
+	out = PoseAverager::AverageFor(recent, [&](const auto& sample) {
+		const Pose refPose = EffectiveReferencePose(sample);
+		return Eigen::AffineCompact3d(refPose.ToAffine() * m_refToTargetPose * sample.target.ToAffine().inverse());
+	});
+	return true;
+}
+
+bool CalibrationCalc::TryInstantRelCalibration(Eigen::AffineCompact3d& out, double& errorOut) const {
+	if (m_samples.empty()) {
+		return false;
+	}
+	const Sample& sample = m_samples.back();
+	const Pose refPose = EffectiveReferencePose(sample);
+	out = Eigen::AffineCompact3d(refPose.ToAffine() * m_refToTargetPose * sample.target.ToAffine().inverse());
+	Eigen::Vector3d offset;
+	return ValidateCalibration(out, &errorOut, &offset);
+}
+
+bool CalibrationCalc::AttemptDivergedRecovery(
+	double priorErrorM,
+	Eigen::AffineCompact3d& out,
+	double& outError)
+{
+	const double maxTransM = std::max(0.08, priorErrorM * 1.1);
+	const double maxRotRad = 20.0 * EIGEN_PI / 180.0;
+
+	struct Candidate {
+		Eigen::AffineCompact3d pose;
+		double error = INFINITY;
+		const char* source = nullptr;
+	};
+
+	std::vector<Candidate> candidates;
+	auto tryCandidate = [&](const Eigen::AffineCompact3d& pose, const char* source) {
+		double error = INFINITY;
+		if (!ValidateCalibration(pose, &error, nullptr)) {
+			return;
+		}
+		if (error >= priorErrorM - kDivergedRecoveryMinImprovementM) {
+			return;
+		}
+		if (!WithinRecoveryJump(pose, maxTransM, maxRotRad)) {
+			return;
+		}
+		candidates.push_back({ pose, error, source });
+	};
+
+	Eigen::AffineCompact3d instantPose;
+	double instantError = INFINITY;
+	if (TryInstantRelCalibration(instantPose, instantError)) {
+		tryCandidate(instantPose, "instant");
+	}
+
+	Eigen::AffineCompact3d recentPose;
+	if (CalibrateByRelPoseRecent(kDivergedRecentSampleCount, recentPose)) {
+		tryCandidate(recentPose, "recent");
+	}
+
+	if (candidates.empty()) {
+		return false;
+	}
+
+	const Candidate* best = &candidates.front();
+	for (const auto& candidate : candidates) {
+		if (candidate.error < best->error) {
+			best = &candidate;
+		}
+	}
+
+	out = best->pose;
+	outError = best->error;
+	char buf[128];
+	snprintf(buf, sizeof buf,
+		"DivergedRecoveryApply:%s:%.0f->%.0fmm\n",
+		best->source, priorErrorM * 1000.0, outError * 1000.0);
+	CalCtx.Log(buf);
+	return true;
+}
+
 
 
 bool CalibrationCalc::ComputeOneshot(const bool ignoreOutliers) {
@@ -707,6 +934,8 @@ bool CalibrationCalc::ComputeOneshot(const bool ignoreOutliers) {
 
 	if (valid) {
 		m_estimatedTransformation = calibration; // @NOTE: Normal calibration
+		m_refToTargetPose = EstimateRefToTargetPose(m_estimatedTransformation);
+		m_relativePosCalibrated = true;
 		m_isValid = true;
 		return true;
 	}
@@ -741,6 +970,7 @@ void CalibrationCalc::RecordLiveMetrics(const Pose& refPose, const Pose& targetP
 	if (ValidateCalibration(liveCalibration, &relPoseError, &relPosOffset)) {
 		Metrics::posOffset_byRelPose.Push(relPosOffset * 1000);
 		Metrics::error_byRelPose.Push(relPoseError * 1000);
+		CalCtx.lastLiveErrorByRelPoseMm = (float)(relPoseError * 1000.0);
 	}
 
 	if (m_isValid) {
@@ -749,6 +979,7 @@ void CalibrationCalc::RecordLiveMetrics(const Pose& refPose, const Pose& targetP
 		if (ValidateCalibration(m_estimatedTransformation, &activeError, &activeOffset)) {
 			Metrics::posOffset_currentCal.Push(activeOffset * 1000);
 			Metrics::error_currentCal.Push(activeError * 1000);
+			CalCtx.lastLiveErrorCurrentCalMm = (float)(activeError * 1000.0);
 		}
 	}
 
@@ -774,29 +1005,129 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 
 			Metrics::posOffset_byRelPose.Push(relPosOffset * 1000);
 			Metrics::error_byRelPose.Push(relPoseError * 1000);
+			CalCtx.lastLiveErrorByRelPoseMm = (float)(relPoseError * 1000.0);
 
 			double priorError = INFINITY;
 			Eigen::Vector3d priorPosOffset;
 			if (m_isValid && ValidateCalibration(m_estimatedTransformation, &priorError, &priorPosOffset)) {
 				Metrics::posOffset_currentCal.Push(priorPosOffset * 1000);
 				Metrics::error_currentCal.Push(priorError * 1000);
+				CalCtx.lastLiveErrorCurrentCalMm = (float)(priorError * 1000.0);
 			}
 
 			const bool firstCal = !m_isValid;
 			constexpr double kMinImprovementM = 0.002;
 			constexpr double kStableErrorM = 0.015;
 			constexpr double kMaxRegressionM = 0.03;
-			const bool meaningfulImprovement = !m_isValid || (priorError > relPoseError + kMinImprovementM);
-			const bool withinBand = relPoseError <= std::max(relPoseMaxError, 0.012);
-			const bool beatsPrior = !m_isValid || (relPoseError * threshold < priorError);
-			const bool notCatastrophic = firstCal || !(priorError < kStableErrorM && relPoseError > kMaxRegressionM);
+			const double priorErrorM = firstCal ? INFINITY : priorError;
+			const bool driftRecovery = !firstCal && std::isfinite(priorErrorM)
+				&& priorErrorM > kDriftRecoveryPriorErrorM;
+
+			const bool meaningfulImprovement = firstCal
+				|| (driftRecovery
+					? (relPoseError <= priorErrorM + 0.01)
+					: (priorErrorM > relPoseError + kMinImprovementM));
+			const bool withinBand = driftRecovery
+				? (relPoseError <= priorErrorM + 0.01)
+				: (relPoseError <= std::max(relPoseMaxError, 0.012));
+			const bool beatsPrior = firstCal
+				|| (driftRecovery
+					? (relPoseError < priorErrorM + 0.005)
+					: (relPoseError * threshold < priorErrorM));
+			const bool notCatastrophic = firstCal || !(priorErrorM < kStableErrorM && relPoseError > kMaxRegressionM);
+
+			const double maxTransJumpM = driftRecovery
+				? std::max(0.12, priorErrorM * 1.25)
+				: 0.03;
+			const double maxRotJumpRad = driftRecovery
+				? 15.0 * EIGEN_PI / 180.0
+				: 5.0 * EIGEN_PI / 180.0;
+
+			if (!firstCal) {
+				TrackAppliedOffsetStall(priorPosOffset);
+
+				const Eigen::Vector3d transJump = byRelPose.translation() - m_estimatedTransformation.translation();
+				if (transJump.norm() > maxTransJumpM) {
+					AnnotateLockRelReject("translation_jump", transJump.norm() * 1000.0, driftRecovery);
+					return false;
+				}
+				const Eigen::AngleAxisd rotJump(
+					m_estimatedTransformation.rotation().inverse() * byRelPose.rotation());
+				if (std::abs(rotJump.angle()) > maxRotJumpRad) {
+					AnnotateLockRelReject("rotation_jump", std::abs(rotJump.angle()) * 1000.0, driftRecovery);
+					return false;
+				}
+			}
+
+			const bool allowImmediate = firstCal
+				|| (driftRecovery && relPoseError < priorErrorM - kMinImprovementM);
 
 			if (notCatastrophic && (firstCal || (meaningfulImprovement && withinBand && beatsPrior))) {
+				if (!ConfirmStaticRelPoseApply(true, allowImmediate)) {
+					return false;
+				}
+				if (driftRecovery) {
+					Metrics::WriteLogAnnotation("LockRelDriftApply");
+					char buf[128];
+					snprintf(buf, sizeof buf,
+						"Drift recovery apply: error %.0f -> %.0f mm\n",
+						priorErrorM * 1000.0, relPoseError * 1000.0);
+					CalCtx.Log(buf);
+				}
+				m_divergedConditionFrames = 0;
+				m_stuckAppliedOffsetFrames = 0;
 				m_isValid = true;
 				m_estimatedTransformation = byRelPose;
 				Metrics::calibrationApplied.Push(false);
 				return true;
 			}
+
+			if (!firstCal && std::isfinite(priorErrorM)) {
+				const bool divergedCondition = priorErrorM > kDivergedPriorErrorM
+					&& relPoseError > priorErrorM + kDivergedRelWorseMarginM
+					&& m_stuckAppliedOffsetFrames >= kStuckAppliedOffsetFramesRequired;
+
+				if (divergedCondition) {
+					m_divergedConditionFrames++;
+				} else {
+					m_divergedConditionFrames = 0;
+				}
+
+				if (m_divergedConditionFrames >= kDivergedRecoveryConfirmFrames) {
+					const double now = glfwGetTime();
+					if (now - m_lastDivergedRecoveryTime >= kDivergedRecoveryCooldownS) {
+						Eigen::AffineCompact3d recoveryPose;
+						double recoveryError = INFINITY;
+						if (AttemptDivergedRecovery(priorErrorM, recoveryPose, recoveryError)) {
+							Metrics::WriteLogAnnotation("DivergedRecoveryApply");
+							m_estimatedTransformation = recoveryPose;
+							m_isValid = true;
+							m_divergedConditionFrames = 0;
+							m_stuckAppliedOffsetFrames = 0;
+							m_lastDivergedRecoveryTime = now;
+							Metrics::calibrationApplied.Push(false);
+							return true;
+						}
+
+						if (m_samples.size() > kDivergedRecentSampleCount) {
+							while (m_samples.size() > kDivergedRecentSampleCount) {
+								m_samples.pop_front();
+							}
+							Metrics::WriteLogAnnotation("DivergedRecoveryTrimSamples");
+						}
+						AnnotateLockRelReject("diverged_no_recovery", priorErrorM * 1000.0, true);
+						m_lastDivergedRecoveryTime = now;
+						m_divergedConditionFrames = 0;
+					}
+				} else if (divergedCondition) {
+					AnnotateLockRelReject("diverged_pending", priorErrorM * 1000.0, true);
+				}
+			}
+
+			if (driftRecovery && !beatsPrior) {
+				AnnotateLockRelReject("no_improvement", relPoseError * 1000.0, true);
+			}
+			m_staticRelPoseConfirmFrames = 0;
 		}
 		return false;
 	}
@@ -831,10 +1162,15 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 					return false;
 				}
 
-				newCalibrationValid = true;
-				usingRelPose = true;
-				newError = relPoseError;
-				calibration = byRelPose;
+				const bool staticEligible = true;
+				if (ConfirmStaticRelPoseApply(staticEligible, !m_isValid)) {
+					newCalibrationValid = true;
+					usingRelPose = true;
+					newError = relPoseError;
+					calibration = byRelPose;
+				}
+			} else {
+				m_staticRelPoseConfirmFrames = 0;
 			}
 		}
 	}
@@ -898,10 +1234,14 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 		double existingPoseErrorUsingRelPosition = RetargetingErrorRMS(m_refToTargetPose.translation(), m_estimatedTransformation);
 		Metrics::error_currentCalRelPose.Push(existingPoseErrorUsingRelPosition * 1000);
 		if (relPoseError * threshold < existingPoseErrorUsingRelPosition || newCalibrationValid && relPoseError < newError) {
-			newCalibrationValid = true;
-			usingRelPose = true;
-			newError = relPoseError;
-			calibration = byRelPose;
+			if (ConfirmStaticRelPoseApply(true, false)) {
+				newCalibrationValid = true;
+				usingRelPose = true;
+				newError = relPoseError;
+				calibration = byRelPose;
+			}
+		} else {
+			m_staticRelPoseConfirmFrames = 0;
 		}
 	}
 
@@ -909,6 +1249,17 @@ bool CalibrationCalc::ComputeIncremental(bool &lerp, double threshold, double re
 	constexpr double kMaxRegressionM = 0.03;
 	if (m_isValid && priorCalibrationError < kStableErrorM && newError > kMaxRegressionM) {
 		newCalibrationValid = false;
+	}
+
+	// Hardening from 1hr play log: prevent full-solve (non-rel) from causing large discontinuous jumps
+	// (e.g. -416mm rawComputed on cont enable) even if it fits recent window. Seed + rel-pose preferred.
+	if (newCalibrationValid && m_isValid && !usingRelPose) {
+		Eigen::Vector3d curT = m_estimatedTransformation.translation();
+		Eigen::Vector3d newT = calibration.translation();
+		if ((newT - curT).norm() > 0.05) {
+			newCalibrationValid = false;
+			CalCtx.Log("Rejected large full-solve offset jump (>5cm) during continuous; keeping seeded/prior\n");
+		}
 	}
 
 	if (newCalibrationValid) {

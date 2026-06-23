@@ -1,5 +1,19 @@
 # contcal fork changelog
 
+## 1.5.1-gore-contcal9 (2026-06-22)
+
+Long-session robustness — diverged recovery, VDXR path warning, log tooling.
+
+| Change | Problem addressed | File(s) |
+|--------|-------------------|---------|
+| **Diverged-state recovery** | Applied offset frozen while `error_currentCal` climbed (69 min session tail) | `CalibrationCalc.cpp`, `CalibrationCalc.h` |
+| **Lock-rel reject annotations** | Silent lock-relative rejects hard to diagnose in logs | `CalibrationCalc.cpp` |
+| **VDXR / SteamVR path warning** | VD OpenXR runtime bypasses SteamVR; partial cal apply | `Calibration.cpp`, `UserInterface.cpp` |
+| **Analyzer stuck-tail detection** | P4 pass missed frozen-offset tails | `scripts/analyze-spacecal-log.ps1` |
+| **Housekeeping scripts** | Docs referenced scripts missing from tree | `apply-p4-winner.ps1`, `run-p4-validation.ps1`, `run-head-ab-session.ps1`, `compare-head-ab.ps1` |
+
+Rebuild overlay + driver; `deploy.ps1` with SteamVR stopped. Validate diverged recovery in a 60+ min VR session before declaring P4 tail pass.
+
 ## 1.5.1-gore-contcal8 (2026-06-21)
 
 Stability release — VR usability, tracking fidelity, log tooling.
