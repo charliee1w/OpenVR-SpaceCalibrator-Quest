@@ -6,7 +6,7 @@
 
 # OpenVR-SpaceCalibrator — Quest SLAM continuous calibration fork
 
-**Version:** `1.5.1-gore-contcal8`  
+**Version:** `1.5.1-slam-exp1` (generalization experiment — see `docs/GENERALIZATION.md`)
 **Base:** [hyblocker/OpenVR-SpaceCalibrator](https://github.com/hyblocker/OpenVR-SpaceCalibrator) `develop`  
 **License:** MIT (see [LICENSE](LICENSE))
 
@@ -103,14 +103,24 @@ Enable **autostart continuous calibration** in the overlay and save your profile
 
 ## Install
 
-### Option A — Build from source (recommended for this fork)
+### Option A — One command (after Release build)
 
-See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. Prebuilt binaries: [GitHub Releases](https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest/releases) (`v1.5.1-contcal8`).
+```powershell
+.\scripts\install.ps1 -Preset quest-vd
+```
 
-### Option B — Steam Space Calibrator + replace binaries
+Pico + ALVR: `-Preset pico-alvr`. Wired Quest Link: `-Preset quest-link`. Deploy only: `-Preset none`.
+
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) for the full first-session checklist.
+
+### Option B — Build from source
+
+See [Build](#build-from-source) and [Deploy](#deploy-to-steamvr) below. Prebuilt binaries: [GitHub Releases](https://github.com/charliee1w/OpenVR-SpaceCalibrator-Quest/releases).
+
+### Option C — Steam Space Calibrator + replace binaries
 
 1. Install [Space Calibrator on Steam](https://s.team/a/3368750) (provides driver registration).
-2. Build this fork and copy `SpaceCalibrator.exe` + `driver_01spacecalibrator.dll` over the Steam install (see Deploy).
+2. Build this fork and run `.\scripts\deploy.ps1` (see Deploy).
 3. Disable duplicate autolaunch if you have the legacy `pushrax` GitHub install.
 
 ---

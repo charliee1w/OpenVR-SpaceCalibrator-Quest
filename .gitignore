@@ -8,6 +8,7 @@ ipch
 /install/*.exe
 [bB]in
 build/
+.worktrees/
 
 # Local / personal artifacts — do not publish
 profiles/p4-*.json
